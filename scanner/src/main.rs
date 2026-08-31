@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use db::ScanDb;
+use db::{DirNodeRow, ScanDb};
 use classifier::Classifier;
 use walker::{scan_tree, ScanEntry, ScanProgress};
 
@@ -153,7 +153,7 @@ fn main() -> Result<()> {
             let stop_agg = stop.clone();
 
             let aggregator_handle = thread::spawn(move || {
-                let mut all_nodes: Vec<(String, String, String, i64, i64, i64, i64, i64, String, String, f64)> = vec![];
+                let mut all_nodes: Vec<DirNodeRow> = vec![];
                 let mut files_buf: Vec<(String, i64, String, String, String, f64)> = Vec::with_capacity(1000);
                 // node_map: path -> (cumulative_file_size, file_count, dir_count)
                 let mut node_map: HashMap<String, (i64, i64, i64)> = HashMap::new();

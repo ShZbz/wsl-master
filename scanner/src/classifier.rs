@@ -8,18 +8,12 @@ pub struct Rule {
     pub category: String,
     pub safety: String,
     #[serde(default)]
-    pub max_depth: i64,
-    #[serde(default)]
     pub exclude_patterns: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RulesFile {
     rules: Vec<Rule>,
-    #[serde(default)]
-    whitelist: Vec<String>,
-    #[serde(default)]
-    excluded_dirs: Vec<String>,
 }
 
 pub struct Classifier {
@@ -101,9 +95,10 @@ impl Classifier {
 }
 
 /// Convert a glob-like pattern to a regex.
-/// - `*` matches any characters except `/` (single path component)
-/// - `?` matches any single character except `/`
-/// - `[abc]` character classes are passed through
+///   * `*` matches any characters except `/` (single path component)
+///   * `?` matches any single character except `/`
+///   * `[abc]` character classes are passed through
+///
 /// Special regex chars (`.+^$(){}|`) are escaped.
 fn glob_to_regex(pattern: &str) -> anyhow::Result<Regex> {
     let mut regex = String::from("^");
@@ -122,8 +117,8 @@ fn glob_to_regex(pattern: &str) -> anyhow::Result<Regex> {
                 let mut closed = false;
                 while j < chars.len() {
                     if chars[j] == ']' {
-                        for k in i..=j {
-                            regex.push(chars[k]);
+                        for &c in &chars[i..=j] {
+                            regex.push(c);
                         }
                         i = j;
                         closed = true;

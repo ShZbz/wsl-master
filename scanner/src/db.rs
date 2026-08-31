@@ -3,6 +3,9 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::Mutex;
 
+/// Directory node row: (path, name, parent_path, depth, size_self, size_total, file_count, dir_count, category, safety, mtime)
+pub type DirNodeRow = (String, String, String, i64, i64, i64, i64, i64, String, String, f64);
+
 pub struct ScanDb {
     conn: Mutex<Connection>,
     scan_id: String,
@@ -102,7 +105,7 @@ impl ScanDb {
 
     /// Insert a batch of directory nodes.
     /// Each item: (path, name, parent_path, depth, size_self, size_total, file_count, dir_count, category, safety, mtime)
-    pub fn insert_nodes_batch(&self, nodes: &[(String, String, String, i64, i64, i64, i64, i64, String, String, f64)]) -> Result<()> {
+    pub fn insert_nodes_batch(&self, nodes: &[DirNodeRow]) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         {
