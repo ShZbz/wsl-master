@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""WSL Storage Master — 命令行入口"""
+import sys
+import os
+
+# 解析 symlink 到真实路径
+script_path = os.path.realpath(__file__)
+pkg_dir = os.path.dirname(os.path.dirname(script_path))
+sys.path.insert(0, pkg_dir)
+
+from wsl_master.__main__ import main
+
+if __name__ == "__main__":
+    main()

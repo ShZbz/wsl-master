@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Rust
+target/
+
+# 运行时数据
+*.db
+*.sqlite
+workspace/
+
+# 环境与密钥
+.env
+*.local.yaml
+
+# 系统
+.DS_Store

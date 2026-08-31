@@ -1,0 +1,130 @@
+# WSL Storage Master — Default Cleanup Rules
+#
+# RULE MATCHING PRIORITY:
+# 1. Rules are evaluated in order — the FIRST matching rule wins
+# 2. Prefix rules (no wildcards) are checked before pattern rules (*, ?, [])
+# 3. Within each group, rules declared earlier take priority
+# 4. If a file matches a rule but also matches that rule's exclude_patterns, it is skipped
+# 5. Uncategorized files (no rule match) are treated as "Safe" and not shown for cleanup
+#
+# Each rule: path/category/safety/max_depth/exclude_patterns
+rules:
+  - path: /var/cache/apt/archives/*.deb
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 2
+    exclude_patterns: []
+    note: "APT 已安装包的缓存 .deb，可安全清理"
+
+  - path: /var/cache/apt/archives/partial
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 2
+    exclude_patterns: []
+    note: "APT 下载中断残留"
+
+  - path: ~/.cache/pip
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 5
+    exclude_patterns: ["**/selfcheck/**"]
+    note: "pip 下载缓存，可安全清理"
+
+  - path: ~/.npm/_cacache
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 4
+    exclude_patterns: []
+    note: "npm 包缓存"
+
+  - path: ~/.cache/go-build
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 5
+    exclude_patterns: []
+    note: "Go 编译缓存"
+
+  - path: ~/.cargo/registry/cache
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 4
+    exclude_patterns: []
+    note: "Cargo crate 缓存"
+
+  - path: ~/.cache/conda
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 5
+    exclude_patterns: []
+    note: "Conda 包缓存"
+
+  - path: ~/.cache/pnpm
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 4
+    exclude_patterns: []
+    note: "pnpm 存储缓存"
+
+  - path: /var/log/*.log
+    category: "系统日志"
+    safety: Safe
+    max_depth: 2
+    exclude_patterns: ["/var/log/wtmp", "/var/log/btmp", "/var/log/faillog"]
+    note: "轮转后的旧日志文件"
+
+  - path: /var/log/*.gz
+    category: "系统日志"
+    safety: Safe
+    max_depth: 2
+    exclude_patterns: []
+    note: "压缩归档日志"
+
+  - path: /var/log/journal
+    category: "系统日志"
+    safety: Caution
+    max_depth: 3
+    exclude_patterns: []
+    note: "systemd journal 日志，建议保留最近记录"
+
+  - path: /tmp/*
+    category: "临时文件"
+    safety: Safe
+    max_depth: 1
+    exclude_patterns: ["/tmp/.X*-lock", "/tmp/.X11-unix"]
+    note: "系统临时目录（仅一级）"
+
+  - path: ~/.cache/thumbnails
+    category: "应用缓存"
+    safety: Safe
+    max_depth: 3
+    exclude_patterns: []
+    note: "缩略图缓存"
+
+  - path: ~/.local/share/Trash
+    category: "临时文件"
+    safety: Safe
+    max_depth: 4
+    exclude_patterns: []
+    note: "桌面回收站"
+
+  - path: ~/.cache
+    category: "应用缓存"
+    safety: Caution
+    max_depth: 1
+    exclude_patterns: ["~/.cache/pip", "~/.cache/go-build", "~/.cache/conda"]
+    note: "用户级通用缓存（仅统计一级，具体子目录由其他规则覆盖）"
+
+whitelist:
+  - /var/log/wtmp
+  - /var/log/btmp
+  - /var/log/faillog
+  - /etc
+  - /var/lib/dpkg
+  - /var/lib/apt/lists
+
+excluded_dirs:
+  - /proc
+  - /sys
+  - /dev
+  - /run
+  - /mnt
