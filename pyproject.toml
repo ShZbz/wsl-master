@@ -1,6 +1,6 @@
 [project]
 name = "wsl-master"
-version = "0.1.0"
+version = "0.1.1"
 description = "WSL2 磁盘空间分析与清理工具：交互式树图磁盘分析、四类垃圾清理、VHDX 收缩助手"
 requires-python = ">=3.10"
 dependencies = [
