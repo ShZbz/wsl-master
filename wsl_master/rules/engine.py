@@ -1,8 +1,52 @@
 import os
 import re
-import fnmatch
 import yaml
 from dataclasses import dataclass, field
+
+
+def glob_to_regex(pattern: str) -> re.Pattern:
+    """Component-wise glob → regex, mirroring scanner/src/classifier.rs.
+
+    Semantics (identical to the Rust scanner so both classifiers agree):
+      *  ``*``  matches any run of characters EXCEPT ``/`` (one component)
+      *  ``?``  matches exactly one non-``/`` character
+      *  ``**`` crosses separators; a trailing ``**/`` segment may also
+        match zero directories (``**/x`` matches ``x`` and ``a/b/x``)
+      *  ``[...]`` character classes are passed through
+    fnmatch was deliberately NOT used: its ``*`` crosses ``/``, which made
+    the fallback scanner classify nested paths (e.g. ``/var/log/d/x.log``
+    under ``/var/log/*.log``) differently from the Rust scanner.
+    """
+    out = ["^"]
+    i, n = 0, len(pattern)
+    while i < n:
+        c = pattern[i]
+        if c == "*":
+            if i + 1 < n and pattern[i + 1] == "*":
+                if i + 2 < n and pattern[i + 2] == "/":
+                    out.append("(?:.*/)?")
+                    i += 2
+                else:
+                    out.append(".*")
+                    i += 1
+            else:
+                out.append("[^/]*")
+        elif c == "?":
+            out.append("[^/]")
+        elif c == "[":
+            j = pattern.find("]", i + 1)
+            if j != -1:
+                out.append(pattern[i:j + 1])
+                i = j
+            else:
+                out.append("\\[")
+        elif c in ".+^$(){}|\\":
+            out.append("\\" + c)
+        else:
+            out.append(c)
+        i += 1
+    out.append("$")
+    return re.compile("".join(out))
 
 
 @dataclass
@@ -26,8 +70,8 @@ class RulesEngine:
         for rule in rules:
             pattern = os.path.expanduser(rule.path_pattern)
             if any(c in pattern for c in "*?[]"):
-                regex = re.compile(fnmatch.translate(pattern))
-                self._pattern_rules.append((regex, rule))
+                # Component-wise glob (same semantics as the Rust scanner)
+                self._pattern_rules.append((glob_to_regex(pattern), rule))
             else:
                 self._prefix_rules.append((pattern, rule))
 
@@ -36,7 +80,7 @@ class RulesEngine:
         for rule in rules:
             if rule.exclude_patterns:
                 self._exclude_cache[rule.path_pattern] = [
-                    re.compile(fnmatch.translate(os.path.expanduser(exc)))
+                    glob_to_regex(os.path.expanduser(exc))
                     for exc in rule.exclude_patterns
                 ]
 

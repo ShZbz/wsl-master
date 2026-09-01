@@ -86,13 +86,18 @@ pub fn scan_tree(
             Ok(e) => e,
             Err(e) => {
                 skipped += 1;
-                let _ = tx_progress.send(ScanProgress {
-                    msg_type: "timeout".into(),
-                    scanned: total_files,
-                    total_bytes,
-                    current: format!("{}/<error: {}>", root_str, e),
-                    timeout: Some(true),
-                });
+                // Rate-limited: a permission-denied-heavy walk used to push
+                // one JSON line per error through the progress channel.
+                if last_progress.elapsed() >= Duration::from_millis(500) {
+                    last_progress = Instant::now();
+                    let _ = tx_progress.send(ScanProgress {
+                        msg_type: "timeout".into(),
+                        scanned: total_files,
+                        total_bytes,
+                        current: format!("{}/<error: {}>", root_str, e),
+                        timeout: Some(true),
+                    });
+                }
                 continue;
             }
         };
@@ -126,31 +131,31 @@ pub fn scan_tree(
             total_bytes += size;
         }
 
-        let relative = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .to_string();
+        // Progress first (borrows path), then send the entry (moves it): this
+        // avoids both a path clone and a relative-path String per entry —
+        // the relative path is only needed once per 500ms progress tick.
+        if last_progress.elapsed() >= Duration::from_millis(500) {
+            last_progress = Instant::now();
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy();
+            let _ = tx_progress.send(ScanProgress {
+                msg_type: "progress".into(),
+                scanned: total_files,
+                total_bytes,
+                current: relative.into_owned(),
+                timeout: None,
+            });
+        }
 
         let _ = tx_entries.send(ScanEntry {
-            path: path.clone(),
+            path,
             size,
             is_dir,
             mtime,
             depth,
         });
-
-        // Send progress every 500ms (time-based, not count-based)
-        if last_progress.elapsed() >= Duration::from_millis(500) {
-            last_progress = Instant::now();
-            let _ = tx_progress.send(ScanProgress {
-                msg_type: "progress".into(),
-                scanned: total_files,
-                total_bytes,
-                current: relative,
-                timeout: None,
-            });
-        }
     }
 
     Ok((total_files, total_bytes, skipped))

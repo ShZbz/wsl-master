@@ -12,6 +12,8 @@ from datetime import datetime
 from typing import Optional
 from pathlib import Path
 
+import wsl_master.config as _config
+
 logger = logging.getLogger("wsl_master.cleaner")
 
 
@@ -75,9 +77,12 @@ def _format_size(bytes_val: int) -> str:
 class Cleaner:
     """Safe deletion executor"""
 
-    def __init__(self, quarantine_dir: Optional[str] = None, log_dir: str = "/var/log/wsl-master"):
-        self.quarantine_dir = quarantine_dir or "/tmp/wsl-master/quarantine"
-        self.log_dir = log_dir
+    def __init__(self, quarantine_dir: Optional[str] = None, log_dir: Optional[str] = None):
+        # Defaults come from config, which falls back to a user-writable dir
+        # when /var/log is root-owned (non-root WSL users would otherwise
+        # crash here with PermissionError).
+        self.quarantine_dir = quarantine_dir or _config.QUARANTINE_DIR
+        self.log_dir = log_dir or _config.LOG_DIR
         os.makedirs(self.log_dir, exist_ok=True)
         os.makedirs(self.quarantine_dir, exist_ok=True)
 
@@ -158,14 +163,10 @@ class Cleaner:
         if os.path.exists(dest):
             base, ext = os.path.splitext(os.path.basename(path))
             dest = os.path.join(self.quarantine_dir, f"{base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}")
-        try:
-            os.rename(path, dest)
-        except OSError as e:
-            if e.errno == 18:  # EXDEV — cross-device link
-                shutil.copy2(path, dest)
-                os.remove(path)
-            else:
-                shutil.move(path, dest)
+        # shutil.move already covers same-fs rename AND cross-fs copy for
+        # files and directories alike; a hand-rolled copy2 fallback broke on
+        # directories (EXDEV move of a dir raised IsADirectoryError).
+        shutil.move(path, dest)
 
     def _save_log(self, report: DeletionReport):
         """Save deletion log as JSON"""

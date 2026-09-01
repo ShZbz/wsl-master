@@ -24,7 +24,7 @@ fn has_prefix_component(p: &str, prefix: &str) -> bool {
 }
 
 #[derive(Parser)]
-#[command(name = "wsl-scanner", version = "0.1.0")]
+#[command(name = "wsl-scanner", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -74,6 +74,23 @@ fn main() -> Result<()> {
                 vec![PathBuf::from("/")]
             };
 
+            // Dedup roots and drop roots nested inside another root —
+            // walking an overlap double-counts every file under it.
+            let mut sorted_roots = scan_paths.clone();
+            sorted_roots.sort();
+            sorted_roots.dedup();
+            let scan_paths: Vec<PathBuf> = sorted_roots
+                .iter()
+                .filter(|r| {
+                    let rs = r.to_string_lossy();
+                    !sorted_roots.iter().any(|other| {
+                        other.as_path() != r.as_path()
+                            && has_prefix_component(&rs, &other.to_string_lossy())
+                    })
+                })
+                .cloned()
+                .collect();
+
             let exclude_dirs: &[&str] = &["/proc", "/sys", "/dev", "/run", "/mnt"];
 
             let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
@@ -117,6 +134,14 @@ fn main() -> Result<()> {
                         }
                         let root_str = root.to_string_lossy();
                         if exclude_dirs.iter().any(|e| has_prefix_component(&root_str, e)) {
+                            // Say WHY the root is skipped — the old silent
+                            // continue made an explicit /mnt/... scan look
+                            // like an empty successful scan.
+                            eprintln!(
+                                "Skipping {:?}: under excluded prefix ({})",
+                                root,
+                                exclude_dirs.join(",")
+                            );
                             continue;
                         }
                         match scan_tree(root, tx_entry_scan.clone(), tx_progress_scan.clone(), timeout, exclude_dirs, max_depth, &stop_scan) {
@@ -264,15 +289,19 @@ fn main() -> Result<()> {
                     }
                 }
 
-                // Bottom-up size propagation
-                let mut sorted_nodes = all_nodes.clone();
-                sorted_nodes.sort_by_key(|n| -n.3); // depth desc
-                for node in &sorted_nodes {
-                    let parent = node.2.clone();
-                    if parent.is_empty() { continue; }
-                    if let Some((csize, cfiles, cdirs)) = node_map.get(&node.0) {
+                // Bottom-up size propagation. Sort an index instead of
+                // cloning every node row (a full deep copy of all dirs).
+                let mut order: Vec<usize> = (0..all_nodes.len()).collect();
+                order.sort_by_key(|&i| std::cmp::Reverse(all_nodes[i].3)); // depth desc
+                for &i in &order {
+                    let node = &all_nodes[i];
+                    let parent = node.2.as_str();
+                    if parent.is_empty() {
+                        continue;
+                    }
+                    if let Some((csize, cfiles, cdirs)) = node_map.get(node.0.as_str()) {
                         let (csize, cfiles, cdirs) = (*csize, *cfiles, *cdirs);
-                        if let Some((psize, pfiles, pdirs)) = node_map.get_mut(&parent) {
+                        if let Some((psize, pfiles, pdirs)) = node_map.get_mut(parent) {
                             *psize += csize;
                             *pfiles += cfiles;
                             *pdirs += cdirs;

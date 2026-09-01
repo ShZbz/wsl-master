@@ -339,7 +339,7 @@ CREATE TABLE IF NOT EXISTS categories (
 - **不对称边框**: 文件夹上边沿 10px（显示目录名如 `tmp/`），左右下各 4px 窄边。小文件夹跳过边框直接铺满子项
 - **颜色**: HSL 分类着色 + 路径 hash 色相偏移(±12°)，同目录同类文件自然区分。未分类文件默认青绿色。最低亮度 38%，深度惩罚 3%/层
 - **安全渲染 (v3.2.2)**: 目录/文件列表用 `data-path` 属性 + 事件委托，名称与路径 HTML 转义（文件名可含 `<>&"` 等字符）；键盘导航在输入框聚焦时不触发
-- **Breadcrumb**: 顶部 `/> home > user > ... > lib > node_modules > openclaw`，长路径截断为首 2 段 + `...` + 尾 3 段，每段可点击跳回（使用完整 parts 数组重建路径，确保截断段仍正确导航）。面包屑 `pointer-events:none` 透传鼠标事件到 canvas，避免阻挡 tooltip
+- **Breadcrumb**: 顶部 `/> home > lishh666 > ... > lib > node_modules > openclaw`，长路径截断为首 2 段 + `...` + 尾 3 段，每段可点击跳回（使用完整 parts 数组重建路径，确保截断段仍正确导航）。面包屑 `pointer-events:none` 透传鼠标事件到 canvas，避免阻挡 tooltip
 - **目录列表联动**: 左侧目录列表顶部显示当前完整路径 + `←` 回退按钮。行左侧 `▶/▼` 箭头可展开内联子目录（异步加载），点击行本身导航树图。支持 `大小`/`名称` 排序切换
 - **悬停 tooltip**: 显示名称、大小、分类、安全等级、完整路径
 - **hover 区分**: 文件夹 hover 白色亮边框 (`#fff`)，文件 hover 浅灰亮边框 (`#94a3b8`)，视觉区分文件/文件夹
@@ -515,3 +515,19 @@ Python 入口启动时检测 `wsl-scanner` 是否在默认路径，若不存在�
 | 浏览器访问不到 WSL 服务 | 绑定 127.0.0.1，打印 URL，自动尝试 cmd.exe start |
 | 端口被占用 | 随机端口检测 + --port 可配 |
 | 大量文件导致前端 OOM | top_n + merge_threshold 限制 + L2 按需加载 |
+
+---
+
+## 15. 变更记录
+
+### v3.2.3 (2026-09-01)
+
+详见 `docs/superpowers/specs/2026-09-01-v3.2.3-bugfix-perf.md`。要点：
+
+- **备用扫描器修复**: fallback 结果此前因未 commit 整体回滚丢失；同秒重扫 IntegrityError；排除根(/mnt 等)不再误走 9p；支持 `stop()` 中止
+- **非 root 启动**: 日志/清理目录按 `/var/log/wsl-master → ~/.local/state/wsl-master → /tmp` 回退，不再 import 期 PermissionError 崩溃（支持 `WSL_MASTER_LOG_DIR`/`WSL_MASTER_QUARANTINE` 环境变量）
+- **规则引擎统一**: Python/Rust 统一为组件级 glob（`*` 不跨 `/`），`**` 跨分隔符——`**/selfcheck/**` 类排除模式在 Rust 端此前从未生效
+- **扫描根路径**: `--paths` 不再逗号拼接（含逗号路径不损坏）；重复/嵌套根去重防双计数；显式扫描排除前缀有明确提示
+- **WebUI**: 假超时根治（目录密集段/写库段不再误报且不再永久停轮询）；停止后如实显示"已停止"；进度回调异常隔离
+- **性能**: walker 每条目省一次 PathBuf 拷贝+String 分配；错误进度 500ms 限速；聚合器索引自底向上传播替代全量行拷贝；fallback 单 stat 判定
+- **Rust 扫描器 0.1.2**; 测试 92 → 108

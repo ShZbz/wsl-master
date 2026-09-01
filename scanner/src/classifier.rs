@@ -97,6 +97,8 @@ impl Classifier {
 /// Convert a glob-like pattern to a regex.
 ///   * `*` matches any characters except `/` (single path component)
 ///   * `?` matches any single character except `/`
+///   * `**` crosses separators; a `**/` segment may also match zero
+///     directories (`**/x` matches `x` and `a/b/x`)
 ///   * `[abc]` character classes are passed through
 ///
 /// Special regex chars (`.+^$(){}|`) are escaped.
@@ -107,7 +109,21 @@ fn glob_to_regex(pattern: &str) -> anyhow::Result<Regex> {
     while i < chars.len() {
         match chars[i] {
             '*' => {
-                regex.push_str("[^/]*");
+                if i + 1 < chars.len() && chars[i + 1] == '*' {
+                    if i + 2 < chars.len() && chars[i + 2] == '/' {
+                        regex.push_str("(?:.*/)?");
+                        i += 2; // consume "**"; the "/" falls through
+                    } else {
+                        // A bare "**" crosses separators. The old code built
+                        // "[^/]*[^/]*", which still couldn't cross "/", so
+                        // exclude patterns like "**/selfcheck/**" never
+                        // matched anything.
+                        regex.push_str(".*");
+                        i += 1; // consume one extra "*"
+                    }
+                } else {
+                    regex.push_str("[^/]*");
+                }
             }
             '?' => {
                 regex.push_str("[^/]");
@@ -172,6 +188,38 @@ mod tests {
         let re = glob_to_regex("/var/cache/apt").unwrap();
         assert!(re.is_match("/var/cache/apt"));
         assert!(!re.is_match("/var/cache/apt/archives/pkg.deb"));
+    }
+
+    #[test]
+    fn test_glob_doublestar_prefix_segment() {
+        let re = glob_to_regex("**/selfcheck/**").unwrap();
+        assert!(re.is_match("/home/u/.cache/pip/selfcheck/x.json"));
+        assert!(re.is_match("selfcheck/x.json")); // "**/" may match zero dirs
+        assert!(re.is_match("/a/deep/selfcheck/sub/y"));
+        assert!(!re.is_match("/home/u/.cache/pip/wheels/x.json"));
+    }
+
+    #[test]
+    fn test_glob_doublestar_suffix() {
+        let re = glob_to_regex("/a/**").unwrap();
+        assert!(re.is_match("/a/b"));
+        assert!(re.is_match("/a/b/c/d"));
+        assert!(!re.is_match("/a")); // suffix "/**" requires something after
+        assert!(!re.is_match("/ab/c")); // component-aware
+    }
+
+    #[test]
+    fn test_classify_doublestar_exclude() {
+        // Mirrors the ~/.cache/pip rule's "**/selfcheck/**" exclude, which
+        // previously compiled to a regex that could never match.
+        let pip_re = glob_to_regex("/home/u/.cache/pip/**").unwrap();
+        let exc_re = glob_to_regex("**/selfcheck/**").unwrap();
+        let c = Classifier {
+            prefix_rules: vec![],
+            pattern_rules: vec![(pip_re, "包管理器缓存".into(), "Safe".into(), vec![exc_re])],
+        };
+        assert_eq!(c.classify("/home/u/.cache/pip/wheels/x.whl").0, "包管理器缓存");
+        assert_eq!(c.classify("/home/u/.cache/pip/selfcheck/x.json").0, "");
     }
 
     fn empty_excludes() -> Vec<Regex> { vec![] }

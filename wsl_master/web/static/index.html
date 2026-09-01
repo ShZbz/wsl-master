@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="auth-token" content="">
-<title>WSL Storage Master v3.2.2</title>
+<title>WSL Storage Master v3.2.3</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0b0f19;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;height:100vh;display:flex;flex-direction:column}
@@ -225,19 +225,31 @@ function stopScan(){
   api('/api/scan/stop',{method:'POST'}).then(()=>{clearTimeout(scanTimer);document.getElementById('btn-stop').disabled=true});
 }
 function pollScanStatus(){
-  var lastChange=Date.now(),lastFiles=0;
+  // Any observable change counts as activity: file count alone stays frozen
+  // while the walker crosses dir-heavy regions (and current_path updates on
+  // every 500ms progress tick), so the old file-count-only watchdog declared
+  // false timeouts and stopped polling while the scan was still running.
+  var lastChange=Date.now(),lastSig='';
   function poll(){
     api('/api/scan/status').then(function(data){
+      var sig=[data.total_files,data.total_size,data.current_path,data.progress].join('|');
+      if(sig!==lastSig){lastChange=Date.now();lastSig=sig}
       if(data.error&&data.state==='error'){document.getElementById('btn-stop').disabled=true;document.getElementById('status-text').textContent='错误: '+data.error;return}
-      if(data.total_files!==lastFiles){lastChange=Date.now();lastFiles=data.total_files}
-      if(Date.now()-lastChange>30000&&data.running){document.getElementById('btn-stop').disabled=true;document.getElementById('status-text').textContent='超时: 扫描无响应';return}
       if(!data.running){
         document.getElementById('btn-stop').disabled=true;
-        document.getElementById('status-text').textContent=data.error?'错误: '+data.error:'\u2705 扫描完成';
+        var st=document.getElementById('status-text');
+        if(data.state==='idle'){st.textContent='⏹ 已停止'}
+        else if(data.error){st.textContent='✅ 扫描完成（'+data.error+'）'}
+        else{st.textContent='\u2705 扫描完成'}
         document.getElementById('scan-progress-bar').style.width='100%';
         if(data.scan_id){scanData=data;loadTreemap()}
       } else {
-        document.getElementById('status-text').textContent=data.current_path?'扫描: '+data.current_path:'扫描中...';
+        // progress hits 100 once walking is done and the scanner is writing
+        // the DB (node batches + wal_checkpoint can take a while on big scans)
+        if((data.progress||0)>=100){document.getElementById('status-text').textContent='扫描完成，正在写入数据库...'}
+        else if(Date.now()-lastChange>30000){document.getElementById('status-text').textContent='扫描无响应 '+Math.round((Date.now()-lastChange)/1000)+'s，可继续等待或点击停止'}
+        else if(data.current_path){document.getElementById('status-text').textContent='扫描: '+data.current_path}
+        else{document.getElementById('status-text').textContent='扫描中...'}
         document.getElementById('scan-progress-bar').style.width=(data.progress||0)+'%';
         scanTimer=setTimeout(poll,500);
       }

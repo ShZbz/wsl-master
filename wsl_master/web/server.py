@@ -199,6 +199,14 @@ class RequestHandler(BaseHTTPRequestHandler):
             result["children"] = [self._node_to_json(c) for c in n["_children"]]
         return result
 
+    @staticmethod
+    def _query_int(query, key: str, default: int, lo: int, hi: int) -> int:
+        raw = query.get(key, [str(default)])[0]
+        try:
+            return max(lo, min(int(raw), hi))
+        except (ValueError, TypeError):
+            return default
+
     def _api_tree(self, query):
         try:
             from wsl_master.cache.store import ScanStore
@@ -207,13 +215,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             store = ScanStore(DEFAULT_DB_PATH)
             scan_id = query.get("scan_id", [None])[0] or store.get_latest_scan_id()
             parent = query.get("parent", [""])[0] or ""
-            top_n = int(query.get("top_n", ["50"])[0])
+            top_n = self._query_int(query, "top_n", 50, 1, 500)
             depth_raw = query.get("depth", ["2"])[0]
             try:
                 max_depth = max(0, min(int(depth_raw), 5))
             except (ValueError, TypeError):
                 max_depth = 2
-            merge_threshold = float(query.get("merge_threshold", ["0.005"])[0])
+            try:
+                merge_threshold = float(query.get("merge_threshold", ["0.005"])[0])
+            except (ValueError, TypeError):
+                merge_threshold = 0.005
 
             if not scan_id:
                 self._send_json({"nodes": [], "total": 0, "parent": ""})
@@ -352,7 +363,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             store = ScanStore(DEFAULT_DB_PATH)
             scan_id = query.get("scan_id", [None])[0] or store.get_latest_scan_id()
             parent = query.get("parent", [""])[0]
-            top_n = int(query.get("top_n", ["200"])[0])
+            top_n = self._query_int(query, "top_n", 200, 1, 2000)
 
             if not scan_id:
                 self._send_json({"files": []})
@@ -551,9 +562,18 @@ class WslWebServer:
         from wsl_master.rules.engine import RulesEngine
         RequestHandler.rules_engine = RulesEngine.from_default()
 
+        class _QuietHTTPServer(ThreadingHTTPServer):
+            # Browsers abort status-poll fetches on navigation; without this
+            # every aborted connection prints a full BrokenPipe traceback.
+            def handle_error(self, request, client_address):
+                exc = sys.exc_info()[1]
+                if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+                    return
+                super().handle_error(request, client_address)
+
         for attempt in range(10):
             try:
-                self._server = ThreadingHTTPServer((self.host, self.port), RequestHandler)
+                self._server = _QuietHTTPServer((self.host, self.port), RequestHandler)
                 self._server.daemon_threads = True
                 self.port = self._server.server_port  # always sync actual port
                 break

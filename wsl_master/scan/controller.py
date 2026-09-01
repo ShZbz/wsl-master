@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 import subprocess
 import threading
 import logging
@@ -11,6 +12,25 @@ from typing import Optional, Callable
 from wsl_master.config import DEFAULT_DB_PATH, DEFAULT_RULES_PATH, DEFAULT_SCANNER_PATH
 
 logger = logging.getLogger("wsl_master.scan")
+
+# Roots pruned during walks (mirrors the Rust scanner's exclude list).
+EXCLUDE_PREFIXES = ("/proc", "/sys", "/dev", "/run", "/mnt")
+
+
+def _is_excluded(p: str, prefixes: tuple[str, ...] = EXCLUDE_PREFIXES) -> bool:
+    # Component-aware prefix match: "/tmp" must not swallow "/tmpfoo"
+    return any(p == e or p.startswith(e + "/") for e in prefixes)
+
+
+def _dedup_roots(paths: list[str]) -> list[str]:
+    """Drop duplicate and nested roots — walking an overlap double-counts
+    every file under it (e.g. scanning both / and /home)."""
+    unique = sorted(set(paths))
+    kept: list[str] = []
+    for p in unique:
+        if not any(p == q or p.startswith(q + "/") for q in unique if q != p):
+            kept.append(p)
+    return kept
 
 
 class ScanState(Enum):
@@ -53,6 +73,20 @@ class ScanController:
         self._thread: Optional[threading.Thread] = None
         self._on_progress: Optional[Callable[[dict], None]] = None
         self._on_done: Optional[Callable[[dict], None]] = None
+        # Set by stop() so the Python fallback walk (which has no subprocess
+        # to terminate) aborts like the Rust scanner does.
+        self._stop_flag = threading.Event()
+
+    def _build_args(self, mode: str, paths: Optional[list[str]]) -> list[str]:
+        """Build the wsl-scanner argv. Paths are passed as repeated --paths
+        flags — the previous ','.join() corrupted paths containing commas."""
+        args = [self.scanner_path, "scan", "--db", self.db_path, "--rules", self.rules_path]
+        if mode == "quick":
+            args.append("--quick")
+        elif paths:
+            for p in paths:
+                args.extend(["--paths", p])
+        return args
 
     def start(
         self,
@@ -67,6 +101,7 @@ class ScanController:
             return
         self._on_progress = on_progress
         self._on_done = on_done
+        self._stop_flag.clear()
         self.status = ScanStatus(state=ScanState.SCANNING)
         logger.info(f"Starting {mode} scan, paths={paths}")
         self._thread = threading.Thread(
@@ -77,6 +112,7 @@ class ScanController:
     def stop(self):
         """Stop scanning."""
         self.status.state = ScanState.IDLE
+        self._stop_flag.set()
         logger.info("Stopping scan")
         if self._process and self._process.poll() is None:
             self._process.terminate()
@@ -105,17 +141,29 @@ class ScanController:
         except Exception:
             logger.debug("aborted-scan cleanup skipped", exc_info=True)
 
+    def _emit_progress(self, data: dict):
+        if self._on_progress:
+            try:
+                self._on_progress(data)
+            except Exception:
+                # A misbehaving callback must not abort the scan loop.
+                logger.warning("on_progress callback failed", exc_info=True)
+
+    def _emit_done(self, data: dict):
+        if self._on_done:
+            try:
+                self._on_done(data)
+            except Exception:
+                logger.warning("on_done callback failed", exc_info=True)
+
     def _run(self, mode: str, paths: Optional[list[str]]):
         scanner = self.scanner_path
         # Fallback: if Rust binary not found, try in PATH
         if not os.path.exists(scanner):
             scanner = "wsl-scanner"
 
-        args = [scanner, "scan", "--db", self.db_path, "--rules", self.rules_path]
-        if mode == "quick":
-            args.append("--quick")
-        elif paths:
-            args.extend(["--paths", ",".join(paths)])
+        args = self._build_args(mode, paths)
+        args[0] = scanner
 
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
@@ -150,8 +198,7 @@ class ScanController:
                     self.status.total_files = data.get("scanned", 0)
                     self.status.total_size = data.get("total_bytes", 0)
                     self.status.progress = min(50, self.status.progress + 1)  # active indicator
-                    if self._on_progress:
-                        self._on_progress(data)
+                    self._emit_progress(data)
                 elif msg_type == "done":
                     scan_id = data.get("scan_id", "")
                     if scan_id:
@@ -161,14 +208,12 @@ class ScanController:
                     self.status.total_size = data.get("total_size", data.get("total_bytes", 0))
                     self.status.skipped = data.get("skipped", 0)
                     self.status.progress = 100
-                    if self._on_done:
-                        self._on_done(data)
+                    self._emit_done(data)
                     if scan_id:
                         break
                 elif msg_type == "timeout":
                     self.status.skipped += 1
-                    if self._on_progress:
-                        self._on_progress(data)
+                    self._emit_progress(data)
 
             # No timeout here: the Rust scanner may spend well over 5s in
             # finish_scan's wal_checkpoint(TRUNCATE) on large databases, which
@@ -210,34 +255,45 @@ class ScanController:
                 os.path.expanduser("~/.local/share/Trash"),
             ]
         elif paths:
-            scan_paths = [p for p in paths if os.path.exists(p)]
+            # Skip roots under excluded prefixes, matching the Rust scanner —
+            # walking into /mnt over 9p would effectively hang the scan.
+            valid = [
+                p.rstrip("/") or "/" for p in paths
+                if os.path.exists(p) and not _is_excluded(p.rstrip("/"))
+            ]
+            scan_paths = _dedup_roots(valid)
         else:
             scan_paths = ["/"]
 
-        exclude_prefixes = ("/proc", "/sys", "/dev", "/run", "/mnt")
         total_files = 0
         total_bytes = 0
         # path -> {"size_self": direct file bytes, "size_total": propagated total, ...}
         node_map = {}
         files_data = []
 
-        def _excluded(p: str) -> bool:
-            # Component-aware prefix match: "/tmp" must not swallow "/tmpfoo"
-            return any(p == e or p.startswith(e + "/") for e in exclude_prefixes)
-
         conn = store._get_conn()
+        # DELETE the scans row first: two scans in the same second share a
+        # scan_id, and the bare INSERT below raised IntegrityError (UNIQUE).
+        conn.execute("DELETE FROM scans WHERE scan_id = ?", (scan_id,))
         conn.execute("DELETE FROM nodes WHERE scan_id = ?", (scan_id,))
         conn.execute("DELETE FROM files WHERE scan_id = ?", (scan_id,))
         conn.execute(
             "INSERT INTO scans (scan_id, total_size, total_files, total_dirs, skipped) "
             "VALUES (?, 0, 0, 0, 0)", (scan_id,)
         )
+        conn.commit()
 
+        stopped = False
         for root_path in scan_paths:
+            if stopped:
+                break
             if not os.path.isdir(root_path):
                 continue
             for dirpath, dirnames, filenames in os.walk(root_path, topdown=True):
-                if dirpath != root_path and _excluded(dirpath):
+                if self._stop_flag.is_set():
+                    stopped = True
+                    break
+                if dirpath != root_path and _is_excluded(dirpath):
                     dirnames[:] = []
                     continue
 
@@ -257,7 +313,11 @@ class ScanController:
                     fpath = os.path.join(dirpath, fname)
                     try:
                         st = os.lstat(fpath)
-                        if not os.path.isfile(fpath):
+                        # Single stat: classify off the lstat mode itself.
+                        # os.path.isfile() would stat a second time (and
+                        # follow symlinks). Symlinks count as files with the
+                        # link's own size, matching the Rust scanner.
+                        if not (stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode)):
                             continue
                         size = st.st_size
                         mtime = int(st.st_mtime)
@@ -280,14 +340,16 @@ class ScanController:
                         files_data.clear()
 
                     if total_files % 100 == 0:
+                        if self._stop_flag.is_set():
+                            stopped = True
+                            break
                         self.status.total_files = total_files
                         self.status.total_size = total_bytes
                         self.status.current_path = fpath
-                        if self._on_progress:
-                            self._on_progress({
-                                "type": "progress", "scanned": total_files,
-                                "total_bytes": total_bytes, "current": fpath[:60],
-                            })
+                        self._emit_progress({
+                            "type": "progress", "scanned": total_files,
+                            "total_bytes": total_bytes, "current": fpath[:60],
+                        })
 
         # Flush remaining files
         if files_data:
@@ -295,6 +357,15 @@ class ScanController:
                 "INSERT INTO files (scan_id, path, size, parent_path, category, safety, mtime) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)", files_data
             )
+
+        if stopped:
+            # Discard the partial scan: rollback uncommitted rows and drop
+            # the all-zero placeholder so latest-scan lookups stay valid.
+            conn.rollback()
+            conn.execute("DELETE FROM scans WHERE scan_id = ?", (scan_id,))
+            conn.commit()
+            self.status.state = ScanState.IDLE
+            return
 
         # Bottom-up size propagation: accumulate into size_total, keep size_self
         # as the directory's own direct file bytes (matches the Rust scanner's schema).
@@ -339,17 +410,20 @@ class ScanController:
             "UPDATE scans SET total_size = ?, total_files = ?, total_dirs = ?, skipped = 0 WHERE scan_id = ?",
             (total_bytes, total_files, len(node_map), scan_id),
         )
+        # Commit everything: without this the open transaction was invisible
+        # to every other connection and rolled back on process exit, i.e. the
+        # whole fallback scan silently produced NO data.
+        conn.commit()
 
         self.status.total_files = total_files
         self.status.total_size = total_bytes
         self.status.progress = 100
         self.status.state = ScanState.DONE
 
-        if self._on_done:
-            self._on_done({
-                "type": "done", "scan_id": scan_id,
-                "total_files": total_files, "total_size": total_bytes,
-            })
+        self._emit_done({
+            "type": "done", "scan_id": scan_id,
+            "total_files": total_files, "total_size": total_bytes,
+        })
 
     def get_status(self) -> dict:
         return {

@@ -13,20 +13,25 @@ import webbrowser
 
 from wsl_master.config import DEFAULT_PORT, DEFAULT_HOST, DEFAULT_DB_PATH, DEFAULT_RULES_PATH, LOG_DIR
 
-os.makedirs(LOG_DIR, exist_ok=True)
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+except OSError:
+    pass
+_handlers = [logging.StreamHandler(sys.stderr)]
+try:
+    _handlers.append(logging.handlers.RotatingFileHandler(
+        os.path.join(LOG_DIR, "wsl_master.log"),
+        maxBytes=10 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    ))
+except OSError:
+    pass  # file logging is best-effort; never block startup
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stderr),
-        logging.handlers.RotatingFileHandler(
-            os.path.join(LOG_DIR, "wsl_master.log"),
-            maxBytes=10 * 1024 * 1024,
-            backupCount=3,
-            encoding="utf-8",
-        ),
-    ],
+    handlers=_handlers,
 )
 
 
