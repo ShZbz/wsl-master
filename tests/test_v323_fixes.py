@@ -156,8 +156,13 @@ class TestPythonFallbackCommits:
         db = str(tmp_path / "scan.db")
         c = ScanController(db_path=db, rules_path="/nonexistent/rules.yaml")
 
+        real_exists = os.path.exists  # capture BEFORE monkeypatching (else infinite recursion)
+
         def fake_exists(p):
-            return True  # pretend /mnt/x exists so only the exclude filter applies
+            # Only lie about /mnt/x; delegating everything else keeps this from
+            # breaking unrelated os.path.exists() guards elsewhere in the
+            # process (e.g. RulesEngine.from_default()'s rule-file probe on CI).
+            return True if p == "/mnt/x" else real_exists(p)
 
         monkeypatch.setattr("wsl_master.scan.controller.os.path.exists", fake_exists)
         self._run_fallback(c, ["/mnt/x"])

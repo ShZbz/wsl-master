@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## v0.1.3 (2026-09-01)
+
+CI 修复轮（对应内部 v3.2.4）。
+
+### 修复
+- **CI 红灯**：`test_fallback_skips_excluded_roots` 在 GitHub Actions 上失败（本地全绿）——该测试把 `os.path.exists` 全局替换为恒真，连带骗过 `RulesEngine.from_default()` 的规则文件守卫，fallback 线程内 `FileNotFoundError`，done 事件永不触发，30s 超时。测试改为只对 `/mnt/x` 说谎，其余委托真实实现
+- **规则文件路径硬编码（生产隐患）**：`from_default()` 写死开发机路径 `/opt/wsl-master/...`，且包内候选指向不存在的 `wsl_master/config/`——除开发机外任何环境 fallback 均静默加载空清理规则。改为源码仓根相对 + 工作目录相对双候选
+
 ## v0.1.2 (2026-09-01)
 
 对应内部版本 v3.2.3：全模块复查修复轮 + 扫描性能优化。

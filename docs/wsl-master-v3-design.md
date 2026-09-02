@@ -520,6 +520,14 @@ Python 入口启动时检测 `wsl-scanner` 是否在默认路径，若不存在�
 
 ## 15. 变更记录
 
+### v3.2.4 (2026-09-01)
+
+CI 修复轮：`test_fallback_skips_excluded_roots` 在 GitHub Actions 上失败（本地全绿）。
+
+- **根因 1（测试卫生）**: 该测试把 `os.path.exists` 全局替换为恒真，连带骗过了 `RulesEngine.from_default()` 的规则文件存在性守卫，导致线程内 `FileNotFoundError` → done 事件永不触发 → 30s 超时。修复：fake 只对 `/mnt/x` 说谎，其余委托真实 `os.path.exists`。
+- **根因 2（生产隐患，本轮一并拔除）**: `rules/engine.py::from_default()` 硬编码 `/opt/wsl-master/config/default_rules.yaml` 开发机路径；另一候选 `wsl_master/../config`（包内）指向不存在的 `wsl_master/config/`——即除本开发机外任何环境 fallback 均静默加载空规则。修复：候选改为源码仓根相对（`../../config/`）+ `os.getcwd()` 相对；两候选在开发机与源码仓内均指向同一真实文件，已验证。
+- 版本 3.2.3 → 3.2.4。测试无新增（回归由 CI 本轮验证）。
+
 ### v3.2.3 (2026-09-01)
 
 详见 `docs/superpowers/specs/2026-09-01-v3.2.3-bugfix-perf.md`。要点：
