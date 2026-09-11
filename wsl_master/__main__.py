@@ -84,7 +84,10 @@ def cmd_scan(args):
         rules_path=getattr(args, 'rules', DEFAULT_RULES_PATH),
     )
     mode = "quick" if args.quick else "custom"
-    paths = args.paths if hasattr(args, 'paths') and args.paths else None
+    # --quick 的语义是"只扫缓存/日志目录"，范围由规则文件派生（见
+    # ScanController._quick_roots），此时忽略位置参数，避免两条路径混在一起
+    paths = None if args.quick else (
+        args.paths if hasattr(args, 'paths') and args.paths else None)
 
     done_event = threading.Event()
     error_message = []
@@ -145,9 +148,19 @@ def cmd_list(args):
 
 
 def cmd_clean(args):
-    """Clean files."""
+    """Clean files.
+
+    与 Web 端共用同一套安全闸门（CleanPolicy）：白名单、受保护目录、占用中、
+    虚拟环境/仓库标记、权限不足、规则变更、Caution 全部在删除前拦截。
+    旧实现只查 DB 里 category 非空的前 100 条就直接删 —— 既漏删（101 名之后
+    的垃圾永远删不到），也没有任何删除前复核。
+    """
+    from collections import Counter
+
     from wsl_master.cache.store import ScanStore
     from wsl_master.clean.executor import Cleaner
+    from wsl_master.clean.planner import select_targets
+    from wsl_master.clean.policy import get_shared_policy
     from wsl_master.config import DEFAULT_DB_PATH
 
     db_path = getattr(args, 'db', DEFAULT_DB_PATH)
@@ -159,26 +172,24 @@ def cmd_clean(args):
 
     cleaner = Cleaner()
     dry_run = args.dry_run
+    allow_caution = bool(getattr(args, "caution", False))
 
-    # Get cleanable files from DB (distinct categories first so the query
-    # can seek the category index instead of scanning every file by size)
-    conn = store._get_conn()
-    from wsl_master.cache.store import distinct_file_categories
-    cats = distinct_file_categories(conn, scan_id, db_path)
-    if cats:
-        placeholders = ",".join("?" * len(cats))
-        rows = conn.execute(
-            f"SELECT path, size, category, safety FROM files "
-            f"WHERE scan_id = ? AND category IN ({placeholders}) "
-            f"ORDER BY size DESC LIMIT 100",
-            [scan_id] + cats,
-        ).fetchall()
-    else:
-        rows = []
-    targets = [(r["path"], r["size"], r["category"], r["safety"]) for r in rows]
+    policy = get_shared_policy()
+    targets, blocked, _rejected, stats = select_targets(
+        store._get_conn(), scan_id, policy,
+        categories=None, allow_caution=allow_caution)
+
+    freeable = sum(t[1] for t in targets)
+    print(f"扫描 {scan_id}：命中垃圾 {stats['files']} 个 / {_fmt(stats['bytes'])}")
+    print(f"安全闸门放行 {len(targets)} 个 / {_fmt(freeable)}；拦截 {len(blocked)} 个")
+    if blocked:
+        for code, n in Counter(b["code"] for b in blocked).most_common():
+            print(f"    - {code}: {n}")
 
     if not targets:
-        print("No cleanable files found.")
+        print("没有可安全删除的文件。")
+        if not allow_caution:
+            print("（若确认要清理 ⚠️ Caution 文件，请加 --caution）")
         return
 
     if dry_run:
@@ -249,6 +260,8 @@ def main():
     p_clean = sub.add_parser("clean", help="Clean files")
     p_clean.add_argument("--no-dry-run", action="store_false", dest="dry_run",
                          default=True, help="Actually delete files (default: dry-run only)")
+    p_clean.add_argument("--caution", action="store_true",
+                         help="同时清理 ⚠️ Caution 文件（模型/浏览器缓存等，删除有代价）")
 
     # vhdx
     p_vhdx = sub.add_parser("vhdx", help="VHDX shrink helper")

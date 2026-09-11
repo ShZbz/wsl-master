@@ -385,4 +385,53 @@ class ScanStore:
 
             return result
 
-        return build(pp, max_depth, max_nodes)
+        # ── Backfill pass ──
+        # collect_deep_files can only walk dirs_by_parent, which is limited to
+        # the max_abs_depth window above. A directory whose files live *below*
+        # that window therefore came back with an empty _children list — e.g.
+        # .cache/uv/.tmpXXXX/nvidia/cu13/lib/*.so sits at depth 5 while the
+        # window for a depth-3 view stops at depth 4. Such a node reaches the
+        # WebUI with no children to draw, so nested mode painted it as one flat
+        # rectangle with nothing inside: the "black block" seen next to dirs
+        # that rendered normally.
+        #
+        # files(parent_path) is indexed, so a subtree is the range
+        # [path + '/', path + '0') — '/' is 0x2F and '0' is 0x30, so this
+        # matches exactly the descendants and nothing else. Only directories
+        # that actually came back childless pay for a lookup (~0.2ms each),
+        # which is far cheaper than widening the window for every query:
+        # widening to cover the deep walk costs ~1.2s and 60k extra file rows,
+        # this costs ~0.004s total on the same scan.
+        def _backfill(nodes_list: list[dict], per_dir: int, budget: list[int]) -> None:
+            for n in nodes_list:
+                kids = n.get("_children")
+                if kids:
+                    _backfill(kids, per_dir, budget)
+                    continue
+                if not n.get("is_dir") or n.get("size_total", 0) <= 0:
+                    continue
+                if not (n.get("file_count") or n.get("dir_count")):
+                    continue
+                if budget[0] <= 0:
+                    continue
+                base = n["path"]
+                want = min(per_dir, budget[0])
+                rows = conn.execute(
+                    "SELECT path, size, category, safety, parent_path FROM files"
+                    " WHERE scan_id = ? AND parent_path >= ? AND parent_path < ?"
+                    " ORDER BY size DESC LIMIT ?",
+                    (scan_id, base + "/", base + "0", want),
+                ).fetchall()
+                if not rows:
+                    continue
+                children = [
+                    _make_file_node(fr["path"], fr["parent_path"], dict(fr), base) for fr in rows
+                ]
+                for c in children:
+                    c["depth"] = n.get("depth", 0) + 1
+                n["_children"] = children
+                budget[0] -= len(children)
+
+        result = build(pp, max_depth, max_nodes)
+        _backfill(result, min(top_n, 50), [3000])
+        return result

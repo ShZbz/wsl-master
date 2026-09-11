@@ -273,8 +273,28 @@ CREATE TABLE IF NOT EXISTS categories (
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET  | `/api/clean/preview` | 预览可清理文件 `?category=系统日志&safety=Safe` |
-| POST | `/api/clean/execute` | 执行删除 `{"paths":["/tmp/foo"],"quarantine":true}` |
+| GET  | `/api/clean/preview` | 全量清理计划 `?scan_id=`：`{scan_id, totals, categories[], files[], blocked_examples[], truncated, rules_changed_since_scan}`。**统计口径是全量**（不受展示上限影响），每个文件都带安全闸门判定 `{deletable, code, reason}` |
+| POST | `/api/clean/execute` | 执行清理。范围式：`{"scan_id","categories":{"系统日志":"safe\|all\|none"},"include":[],"exclude":[],"allow_caution":false,"quarantine":true}`；显式式（兼容）：`{"paths":[...]}`。两条路径都逐条过 CleanPolicy |
+
+清理的安全性由服务端把关，前端只是"表达选择"：
+
+```
+files 表 (扫描结果)
+   │  category != ''            ← 候选集（无 LIMIT 截断）
+   ▼
+CleanPolicy.evaluate()           ← 删除前的唯一权威判定
+   ├ 白名单 / wsl-master 自身数据  → 拦截
+   ├ 规则复核（按"当前"规则重算分类）→ 已非垃圾则拦截
+   ├ Caution 且未显式确认          → 拦截
+   ├ 文件不存在 / 已变成目录        → 拦截（绝不 rmtree）
+   ├ 被进程打开或 mmap             → 拦截
+   ├ 位于虚拟环境 / Git 仓库内      → 拦截
+   ├ 无写权限（含 root 拥有的日志）  → 拦截
+   └ 临时目录中 10 分钟内仍在写入    → 拦截
+   ▼
+/var/log/wsl-master/… 日志 + 隔离区（按原始路径镜像 + manifest.jsonl）
+```
+
 
 
 ### 7.4 VHDX
@@ -351,10 +371,18 @@ CREATE TABLE IF NOT EXISTS categories (
 
 ### 8.3 文件清理 Tab
 
-- **分类筛选**: 四个分类按钮可独立开关（系统日志/包管理器缓存/临时文件/应用缓存）
-- **快速选择**: 每个分类标题下有三态循环按钮 — ☑全选(绿) → ☑Safe(黄) → ☐未选(灰)
-- **不安全文件保护**: 删除时若包含 ⚠️ 不安全文件，弹出明细确认 → 再弹总数确认 → 双重确认后才执行
-- **默认仅选 Safe**: 刷新时自动只选中安全等级文件
+- **四个数字卡（v3.2.5）**:
+  - *选中垃圾总大小* = 当前勾选会被释放的空间（取消勾选即时联动）
+  - *可删除文件总大小* = 扫描出的、删除后无影响且通过安全闸门的全部垃圾（项目效果上限）
+  - *扫描发现垃圾总量* = 命中清理规则的全部文件（含 ⚠️ 与已拦截）
+  - *⚠️ 需确认 / 🔒 已拦截* = 需显式确认才可删的（模型、浏览器缓存…）与闸门拦下的（占用中、虚拟环境、无权限…）
+- **分类动态化**: 分类按钮由服务端返回的分类生成，不再是写死的 4 个（新分类不会"看不见也删不掉"）
+- **三态循环**: 每个分类 ☑仅Safe(默认) → ☑全选 → ☐未选；单个文件可单独勾选/取消
+- **默认勾选**: 扫描结束后自动加载并全选"删除后无影响"的 Safe 文件（loadCleanPreview 在扫描完成时触发）
+- **拦截可视化**: 被闸门拦下的文件仍在列表中（🔒 + 原因），不会静默消失
+- **不安全文件保护**: 选中含 ⚠️ 时先弹明细确认（置 allow_caution）→ 再弹总数确认 → 双重确认后才执行
+- **列表截断说明**: 每个分类最多展示 300 个（按大小），但**删除范围是全量勾选集**，界面明确标注
+- **深链**: 支持 #scan / #clean / #vhdx 直接进入对应标签页
 
 ---
 
@@ -396,6 +424,16 @@ sync_channel 背压:
   tx_progress: sync_channel(100)  → 进度消息
 ```
 ```
+
+### 9.2.1 快速扫描范围（v3.2.5）
+
+快速扫描的根目录不再是写死的目录列表，而是从规则文件派生：
+
+- Python 侧：`rules/engine.py::quick_scan_roots()` 取每条规则的"静态前缀"（第一个通配符之前的部分，如 /var/log/*.log → /var/log），去重嵌套后过滤不存在的目录，再由 ScanController 以多个 --paths 传给扫描器；
+- Rust 侧：`wsl-scanner scan --quick` 保留同一份列表，供直接调用二进制时使用。
+
+因此"规则能识别什么"与"快速扫描扫到哪里"只有一个真值来源，新增规则即自动纳入扫描范围。
+本机实测：列入 ~/.npm/_cacache、~/.cargo/registry/cache 后，快速扫描多发现 10 GB / 1.1 万个文件。
 
 ### 9.3 数据写入策略
 
@@ -519,6 +557,41 @@ Python 入口启动时检测 `wsl-scanner` 是否在默认路径，若不存在�
 ---
 
 ## 15. 变更记录
+
+### v3.2.5 (2026-09-11)
+
+清理逻辑重构轮：目标是"**不要漏删、也不要错删**"，并把"扫描 → 清理"两端对齐。
+
+**漏删（修 3 处）**
+- /api/clean/preview 旧实现是 ORDER BY size DESC LIMIT 500：本机实测 10 万个垃圾文件里只有 500 个能被看到和删除。现在统计**全量**、只截断展示；执行按"分类范围 + 排除项"在全量候选集上重算，与预览同一套判定。
+- 清理页分类写死 4 个：不在列表里的分类既不显示也删不掉。现在分类由服务端返回，有几个显示几个。
+- 快速扫描目录在 Python / Rust 里各写死一份（且缺 ~/.npm/_cacache、~/.cargo/registry/cache），新增规则时扫描范围不跟随 → "规则认识、扫描扫不到"。现在由 rules/engine.py::quick_scan_roots() 从规则文件派生，Rust --quick 列表同步；本机实测因此多发现 **10 GB / 1.1 万文件** 的 npm 缓存。
+
+**错删（新增 clean/policy.py 删除安全闸门，删除前逐条复核）**
+- 白名单此前只写在 YAML 里、无人执行 → 现在 Rust/Python 两侧都生效，删除端再次拦截
+- wsl-master 自身数据（数据库 / 隔离区 / 日志 / 规则 / 二进制）永不删除
+- 规则复核：按**当前**规则重算分类，规则改过后旧扫描结果不能授权删除
+- 进程占用（/proc/*/fd + /proc/*/maps 快照）→ 拦截（删了也不释放空间，还会影响运行中的程序）
+- 虚拟环境 / Git 仓库标记（pyvenv.cfg、.git）→ 拦截。本机实测拦下 ~/.cache/phxsc-venv、~/.cache/dsh-sdk-venv 共 3.3 万文件，以及 uv 缓存里一个 65 MB 的 uv 托管虚拟环境
+- 文件类型复核：扫描时是文件、删除时已变目录 → 拒绝（旧 _delete_path 会 shutil.rmtree 整棵子树）
+- 权限复核：无写权限（如 root 拥有的 /var/log/*.gz）不再计入"可删除"
+- 临时目录 10 分钟内仍在写入的文件不默认勾选
+- Caution 需 allow_caution 显式置位（前端二次确认后才发），服务端不再"客户端说删就删"
+
+**隔离区（发现并修复一个静默数据丢失缺陷）**
+- 旧实现把文件搬到 quarantine/<basename> 扁平目录，同名文件互相覆盖（shutil.move 遇已存在目标静默 rename），"可还原"名不副实
+- 现在按 quarantine/<run_id>/<原始绝对路径> 镜像存放，并在 run 目录实时追加 manifest.jsonl；同名多份时 restore_from_quarantine() **拒绝猜测**并报错
+
+**规则调整（保守扩张，用户确认的方案 A）**
+- 升级为 Safe：~/.cache/uv、~/.cache/pypoetry、~/.cache/yarn、~/.npm/_logs、~/.cache/node-gyp、~/.cache/node、~/.cache/typescript、~/.cache/pyinstaller、~/.cache/fontconfig、~/.cache/mesa_shader_cache、/var/log/*.[0-9]
+- 保持 Caution（删除有代价）：huggingface 模型、ms-playwright/puppeteer/electron 二进制、Chrome/Chromium 用户目录、/var/log/journal
+- 兜底规则改为通配符规则（/var/log/**、~/.cache/**）：前缀规则优先于通配符规则，否则兜底会抢在 /var/log/*.log 之前把轮转日志误判成 Caution
+- Python 前缀规则改为按长度降序（与 Rust 一致），消除两套引擎对嵌套前缀规则的判定分歧
+
+**性能**
+- 白名单/保护目录判定改前缀 trie、权限判定改 mode 位比较（省 10 万次 access）、父目录可写性按目录缓存：全量 9.5 万文件的审计从 ~7s 降到 ~3s；计划缓存 15s（删除/换扫描即失效）
+
+**测试**: 116 → 151（新增 tests/test_clean_policy.py 35 项：闸门各分支、全量统计、范围式执行、快速扫描派生、隔离区同名不覆盖/歧义拒绝）
 
 ### v3.2.4 (2026-09-01)
 

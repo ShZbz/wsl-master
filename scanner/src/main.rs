@@ -60,12 +60,20 @@ fn main() -> Result<()> {
         Commands::Scan { paths, quick, db_path, rules, timeout, max_depth } => {
             let scan_id = format!("scan_{}", chrono::Local::now().format("%Y%m%d_%H%M%S"));
 
+            // Kept in sync with config/default_rules.yaml via
+            // wsl_master/rules/engine.py::quick_scan_roots, which is what the
+            // app actually passes (as --paths). Missing roots here would mean
+            // "rules can see it, quick scan never reaches it" = permanent
+            // missed deletions (e.g. ~/.npm/_cacache, ~/.cargo/registry/cache).
             let scan_paths: Vec<PathBuf> = if quick {
                 vec![
-                    PathBuf::from("/var/cache/apt"),
+                    PathBuf::from("/var/cache/apt/archives"),
                     PathBuf::from("/var/log"),
                     PathBuf::from("/tmp"),
                     PathBuf::from(shellexpand::tilde("~/.cache").into_owned()),
+                    PathBuf::from(shellexpand::tilde("~/.npm/_cacache").into_owned()),
+                    PathBuf::from(shellexpand::tilde("~/.npm/_logs").into_owned()),
+                    PathBuf::from(shellexpand::tilde("~/.cargo/registry/cache").into_owned()),
                     PathBuf::from(shellexpand::tilde("~/.local/share/Trash").into_owned()),
                 ]
             } else if !paths.is_empty() {
@@ -104,6 +112,7 @@ fn main() -> Result<()> {
                 Classifier {
                     prefix_rules: vec![],
                     pattern_rules: vec![],
+                    whitelist: vec![],
                 }
             }));
 

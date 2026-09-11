@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="auth-token" content="">
-<title>WSL Storage Master v3.2.4</title>
+<title>WSL Storage Master v3.2.5</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0b0f19;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;height:100vh;display:flex;flex-direction:column}
@@ -45,7 +45,7 @@ nav button.active{background:#0ea5e9;color:white}
 #dir-list-body td{padding:5px 12px;border-bottom:1px solid #1e293b;cursor:pointer}
 #dir-list-body tr:hover{background:#1e293b}
 #dir-list-body tr.selected{background:#0ea5e9;color:white}
-#treemap-container{flex:1;position:relative;background:#0b0f19}
+#treemap-container{flex:1;position:relative;background:#0f1626}
 #treemap-canvas{width:100%;height:100%;display:block}
 #breadcrumb{position:absolute;top:8px;left:12px;right:12px;z-index:10;font-size:13px;display:flex;gap:4px;align-items:center;overflow-x:auto;pointer-events:none}
 #breadcrumb span{padding:4px 10px;border-radius:4px;cursor:pointer;background:rgba(21,27,43,.9);color:#94a3b8;white-space:nowrap;border:1px solid #2d3748;pointer-events:auto}
@@ -66,19 +66,44 @@ nav button.active{background:#0ea5e9;color:white}
 #merge-toggle input{margin:0;accent-color:#0ea5e9}
 #merge-toggle:hover{color:#e2e8f0}
 
-#clean-controls{height:44px;background:#151b2b;border-bottom:1px solid #2d3748;display:flex;align-items:center;padding:0 16px;gap:10px}
-#clean-controls button{background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:6px 14px;border-radius:5px;font-size:12px;cursor:pointer}
-#clean-controls button.selected{background:#0ea5e9;color:white;border-color:#0ea5e9}
+#clean-controls{height:44px;background:#151b2b;border-bottom:1px solid #2d3748;display:flex;align-items:center;padding:0 16px;gap:10px;flex-wrap:wrap;overflow-x:auto}
+#clean-controls button{background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:6px 14px;border-radius:5px;font-size:12px;cursor:pointer;white-space:nowrap}
+#clean-controls button:hover{background:#2d3748;color:#e2e8f0}
+#clean-controls button.primary{background:#0ea5e9;color:white;border-color:#0ea5e9}
+#clean-controls button.cat-all{background:#10b981;color:#fff;border-color:#10b981}
+#clean-controls button.cat-safe{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
+#clean-controls button.cat-none{background:#1e293b;color:#64748b}
+#clean-cat-filters{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#clean-stats{display:flex;gap:10px;padding:10px 16px;background:#0f1626;border-bottom:1px solid #2d3748;flex-shrink:0;flex-wrap:wrap}
+.stat-card{background:#151b2b;border:1px solid #2d3748;border-radius:8px;padding:8px 14px;min-width:170px}
+.stat-card .label{font-size:11px;color:#64748b;margin-bottom:2px}
+.stat-card .value{font-size:19px;font-weight:700;color:#38bdf8;line-height:1.25}
+.stat-card.safe .value{color:#10b981}
+.stat-card.junk .value{color:#94a3b8}
+.stat-card.warn .value{color:#f59e0b}
+.stat-card .sub{font-size:11px;color:#64748b;margin-top:2px}
+#clean-notice{padding:0 16px;flex-shrink:0}
+.clean-banner{margin-top:10px;padding:8px 12px;border-radius:6px;font-size:12px;background:#1e293b;border:1px solid #334155;color:#94a3b8}
+.clean-banner.warn{background:#3b2a12;border-color:#b45309;color:#fbbf24}
+.clean-banner.ok{background:#0f2a20;border-color:#10b981;color:#6ee7b7}
 #clean-files{flex:1;overflow-y:auto;padding:16px}
 #clean-files table{width:100%;border-collapse:collapse;font-size:12px}
-#clean-files th{background:#151b2b;padding:8px 12px;text-align:left;color:#64748b;border-bottom:1px solid #2d3748}
+#clean-files th{background:#151b2b;padding:8px 12px;text-align:left;color:#64748b;border-bottom:1px solid #2d3748;position:sticky;top:0}
 #clean-files td{padding:6px 12px;border-bottom:1px solid #1e293b}
-#clean-files tr:hover{background:#1e293b;cursor:pointer}
+#clean-files tr.row-ok:hover{background:#1e293b;cursor:pointer}
+#clean-files tr.row-blocked{color:#64748b;cursor:not-allowed}
+#clean-files tr.row-blocked td.path{color:#475569}
 .cat-section{margin-bottom:20px}
-.cat-header{background:#151b2b;padding:10px 16px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border:1px solid #2d3748}
+.cat-header{background:#151b2b;padding:10px 16px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border:1px solid #2d3748;gap:12px}
 .cat-header:hover{background:#1e293b}
+.cat-header .cat-stats{color:#64748b;font-size:11px;margin-left:auto;white-space:nowrap}
 .cat-body{display:none;margin-top:8px}
 .cat-body.open{display:block}
+.badge{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10px;border:1px solid #334155;color:#94a3b8;margin-right:6px;white-space:nowrap}
+.badge.safe{background:#0f2a20;border-color:#10b981;color:#6ee7b7}
+.badge.caution{background:#3b2a12;border-color:#b45309;color:#fbbf24}
+.badge.blocked{background:#2a1215;border-color:#b91c1c;color:#fca5a5}
+.clean-reason{color:#64748b;font-size:11px}
 
 #vhdx-content{padding:20px}
 #vhdx-content button{background:#0ea5e9;border:none;color:white;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;margin:10px 0;margin-right:10px}
@@ -142,13 +167,33 @@ nav button.active{background:#0ea5e9;color:white}
   <!-- Clean Tab -->
   <div id="tab-clean" class="tab">
     <div id="clean-controls">
-      <button class="selected" data-cat="系统日志" onclick="toggleCatFilter(this)">系统日志</button>
-      <button class="selected" data-cat="包管理器缓存" onclick="toggleCatFilter(this)">包管理器缓存</button>
-      <button class="selected" data-cat="临时文件" onclick="toggleCatFilter(this)">临时文件</button>
-      <button class="selected" data-cat="应用缓存" onclick="toggleCatFilter(this)">应用缓存</button>
+      <div id="clean-cat-filters"></div>
       <button onclick="loadCleanPreview()" style="margin-left:auto">🔄 刷新</button>
       <button class="primary" onclick="executeClean()">🗑 删除所选</button>
     </div>
+    <div id="clean-stats">
+      <div class="stat-card sel">
+        <div class="label">选中垃圾总大小</div>
+        <div class="value" id="stat-selected-size">-</div>
+        <div class="sub" id="stat-selected-count">-</div>
+      </div>
+      <div class="stat-card safe">
+        <div class="label">可删除文件总大小（Safe · 删除无影响）</div>
+        <div class="value" id="stat-safe-size">-</div>
+        <div class="sub" id="stat-safe-count">-</div>
+      </div>
+      <div class="stat-card junk">
+        <div class="label">扫描发现垃圾总量</div>
+        <div class="value" id="stat-junk-size">-</div>
+        <div class="sub" id="stat-junk-count">-</div>
+      </div>
+      <div class="stat-card warn">
+        <div class="label">⚠️ 需确认 / 已拦截</div>
+        <div class="value" id="stat-blocked-size">-</div>
+        <div class="sub" id="stat-blocked-count">-</div>
+      </div>
+    </div>
+    <div id="clean-notice"></div>
     <div id="clean-files"></div>
   </div>
 
@@ -164,14 +209,20 @@ nav button.active{background:#0ea5e9;color:white}
 
 <script>
 // Tab navigation
+function showTab(name){
+  if(!document.getElementById('tab-'+name))name='scan';
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  if(name==='scan')resizeCanvas();
+  // 首次进入清理页时按当前扫描结果加载（默认勾选全部无影响的 Safe 文件）
+  if(name==='clean'&&!cleanPlan)loadCleanPreview();
+}
 document.querySelectorAll('nav button').forEach(btn=>{
-  btn.onclick=()=>{
-    document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-    document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
-  };
+  btn.onclick=()=>{location.hash=btn.dataset.tab;showTab(btn.dataset.tab)};
 });
+// 支持 #scan / #clean / #vhdx 深链（同时也是端到端验证的入口）
+if(location.hash)showTab(location.hash.slice(1));
 
 // API helper
 var AUTH_TOKEN='';
@@ -242,7 +293,8 @@ function pollScanStatus(){
         else if(data.error){st.textContent='✅ 扫描完成（'+data.error+'）'}
         else{st.textContent='\u2705 扫描完成'}
         document.getElementById('scan-progress-bar').style.width='100%';
-        if(data.scan_id){scanData=data;loadTreemap()}
+        // 扫描结束 → 清理页按最新扫描结果复位：默认勾选全部"删除后无影响"的 Safe 文件
+        if(data.scan_id){scanData=data;loadTreemap();loadCleanPreview()}
       } else {
         // progress hits 100 once walking is done and the scanner is writing
         // the DB (node batches + wal_checkpoint can take a while on big scans)
@@ -321,7 +373,7 @@ function squarify(items,x,y,w,h){
 
 function squarifyNested(items,x,y,w,h,depth,_maxRects,_mergeSmall){
   if(!items||!items.length||w<=0||h<=0)return[];
-  if(!_maxRects)_maxRects=2000;
+  if(!_maxRects)_maxRects=6000;
   if(_maxRects<=0)return[];
   if(_mergeSmall===undefined)_mergeSmall=mergeSmall;
 
@@ -348,7 +400,14 @@ function squarifyNested(items,x,y,w,h,depth,_maxRects,_mergeSmall){
     }
   }
 
-  var norm=normalize(items,w,h);
+  // Zero-byte entries own no area. Left in, they give _pa 0 and the squarify
+  // ratios go degenerate (0/0 -> NaN), which silently poisons a whole row's
+  // widths without ever throwing.
+  var usable=[];
+  for(var zi=0;zi<items.length;zi++){if((items[zi].size||0)>0)usable.push(items[zi])}
+  if(!usable.length)return[];
+
+  var norm=normalize(usable,w,h);
   var flat=squarify(norm,x,y,w,h);
   var result=[],topPad=10,sidePad=4,botPad=4;
 
@@ -360,6 +419,11 @@ function squarifyNested(items,x,y,w,h,depth,_maxRects,_mergeSmall){
         if(cw>10&&ch>10){
           var subs=squarifyNested(it.children,cx,cy,cw,ch,(depth||0)+1,_maxRects-result.length,_mergeSmall);
           if(subs.length){
+            // Marked as a container: the renderer paints a recessed panel and
+            // lets the children cover the inner area. Anything NOT marked is a
+            // leaf and gets a solid block in its category colour, whether it is
+            // a file or a folder with nothing to expand into.
+            it._container=1;
             result.push(it);
             for(var j=0;j<subs.length;j++)result.push(subs[j]);
             continue;
@@ -396,50 +460,97 @@ window.addEventListener('resize',function(){
 function drawTreemap(){
   var w=canvas.width/DPR,h=canvas.height/DPR;
   ctx.setTransform(DPR,0,0,DPR,0,0);ctx.clearRect(0,0,w,h);
-  if(!layout.length){ctx.fillStyle='#475569';ctx.font='14px sans-serif';ctx.textAlign='center';ctx.fillText('请先扫描',w/2,h/2);return}
+  if(!layout.length){
+    // Zero-byte-only views now filter down to an empty layout, so "no data"
+    // must not be reported as "not scanned yet".
+    ctx.fillStyle='#64748b';ctx.font='14px sans-serif';ctx.textAlign='center';
+    ctx.fillText(scanData?'此目录没有可显示的内容':'请先扫描',w/2,h/2);
+    return;
+  }
 
+  // Pass 1 — fills. A folder that holds drawn children is a recessed panel;
+  // everything else (files AND folders with nothing to expand into) is a solid
+  // block in its own category colour.
+  //
+  // Folders used to be painted one flat #1e3050 at 35% alpha regardless of
+  // content. Flat mode returns top-level folders only, so its whole canvas was
+  // a single near-black colour — which is why it read as dark and monotonous.
+  // It also turned a folder the payload had no children for into a rectangle
+  // with nothing inside it: the "black block" in nested mode.
   for(var i=0;i<layout.length;i++){
     var it=layout[i];
     var x=it.x,y=it.y,iw=it.w,ih=it.h;
+    // Reject degenerate rects first: NaN fails every < / > comparison, so an
+    // unchecked one would still reach fillRect (a no-op) — or worse, an
+    // equality-based hit test.
+    if(!(iw>0)||!(ih>0))continue;
+    // Sub-2px rects carry no visible colour but a dense view can hold
+    // thousands of them; skipping them here is free.
+    if(iw*ih<2)continue;
     if(x+iw<0||x>w||y+ih<0||y>h)continue;
     var isH=HOVERED&&HOVERED.id===it.id;
 
-    if(it.isDir){
-      ctx.globalAlpha=0.35;ctx.fillStyle='#1e3050';ctx.fillRect(x,y,iw,ih);ctx.globalAlpha=1;
+    if(it.isDir&&it._container){
+      ctx.globalAlpha=0.55;ctx.fillStyle='#1b2b45';ctx.fillRect(x,y,iw,ih);ctx.globalAlpha=1;
+      continue;                       // border + label come in pass 2
+    }
+    if(iw<1||ih<1)continue;
+    ctx.fillStyle=it.color||'hsl(180,50%,48%)';
+    if(iw<6||ih<6){
+      // Tiny block: solid fill, no border. A near-black 0.5px stroke used to
+      // dominate sub-6px rects and made every small file look like a black
+      // speck against the dark background.
+      ctx.globalAlpha=1;
+      ctx.fillRect(x,y,iw,ih);
     }else{
-      if(iw<1||ih<1)continue;
-      ctx.fillStyle=it.color||'hsl(180,50%,48%)';
-      if(iw<6||ih<6){
-        // Tiny block: solid fill, no border. A near-black 0.5px stroke used to
-        // dominate sub-6px rects and made every small file look like a black
-        // speck against the dark background.
-        ctx.globalAlpha=1;
-        ctx.fillRect(x,y,iw,ih);
-      }else{
-        ctx.globalAlpha=isH?0.92:0.88;
-        ctx.fillRect(x,y,iw,ih);
-        ctx.globalAlpha=isH?0.6:0.25;ctx.strokeStyle=isH?'#94a3b8':'#334155';ctx.lineWidth=isH?1.5:0.5;
-        ctx.strokeRect(x+0.5,y+0.5,iw-1,ih-1);ctx.globalAlpha=1;
+      ctx.globalAlpha=isH?0.95:(it.isDir?0.82:0.9);
+      ctx.fillRect(x,y,iw,ih);
+      ctx.globalAlpha=isH?0.65:0.3;
+      ctx.strokeStyle=isH?'#e2e8f0':(it.isDir?'#0b1220':'#334155');
+      ctx.lineWidth=isH?1.5:0.5;
+      ctx.strokeRect(x+0.5,y+0.5,iw-1,ih-1);ctx.globalAlpha=1;
+      if(iw>=180&&ih>=140){
+        // A large tile is otherwise one flat slab of colour. A soft vertical
+        // shade gives it depth without changing the area it encodes, which
+        // matters most in flat mode where a single folder can cover most of
+        // the canvas.
+        var g=ctx.createLinearGradient(0,y,0,y+ih);
+        g.addColorStop(0,'rgba(255,255,255,0.10)');
+        g.addColorStop(0.55,'rgba(255,255,255,0)');
+        g.addColorStop(1,'rgba(0,0,0,0.18)');
+        ctx.fillStyle=g;ctx.fillRect(x,y,iw,ih);
       }
-      if(iw>=24&&ih>=14){
-        var fs=Math.max(10,Math.min(14,ih*0.22,iw*0.07));
-        ctx.fillStyle='#f1f5f9';ctx.font='bold '+fs+'px sans-serif';ctx.textAlign='left';ctx.textBaseline='top';
-        var label=it.name,maxChars=Math.floor(iw/fs*0.8);
-        if(label.length>maxChars)label=label.slice(0,Math.max(1,maxChars-2))+'..';
-        ctx.fillText(label,x+3,y+2);
-        if(ih>fs+16){ctx.font=Math.max(8,fs-2)+'px sans-serif';ctx.fillStyle='#cbd5e1';ctx.fillText(fmtSize(it.size),x+3,y+fs+5)}
+    }
+    // Leaf folders are labelled like files here (with a trailing slash) so a
+    // flat-mode tile still reads as a folder rather than a giant file.
+    if(it.isDir?iw>=70&&ih>=34:iw>=24&&ih>=14){
+      var fs=it.isDir?Math.max(11,Math.min(16,ih*0.16,iw*0.06)):Math.max(10,Math.min(14,ih*0.22,iw*0.07));
+      ctx.fillStyle='#f8fafc';ctx.font='bold '+fs+'px sans-serif';ctx.textAlign='left';ctx.textBaseline='top';
+      var label=(it.isDir?it.name+'/':it.name),maxChars=Math.floor(iw/fs*(it.isDir?0.92:0.8));
+      if(label.length>maxChars)label=label.slice(0,Math.max(1,maxChars-2))+'..';
+      ctx.fillText(label,x+4,y+3);
+      if(ih>fs+18){
+        ctx.font=Math.max(9,fs-3)+'px sans-serif';ctx.fillStyle='#e2e8f0';
+        var sub=fmtSize(it.size);
+        if(it.isDir&&it.fileCount)sub+='  ·  '+it.fileCount.toLocaleString()+' 个文件';
+        ctx.fillText(sub,x+4,y+fs+6);
       }
     }
   }
-  // Folder borders drawn on top (in reverse order so nested borders show)
+  // Pass 2 — folder borders and labels, drawn on top so nested borders show.
   for(var i=0;i<layout.length;i++){
     var it=layout[i];if(!it.isDir)continue;
     var x=it.x,y=it.y,iw=it.w,ih=it.h;
+    if(!(iw>0)||!(ih>0))continue;
     if(iw<12||ih<12||x+iw<0||x>w||y+ih<0||y>h)continue;
     var isH=HOVERED&&HOVERED.id===it.id;
-    ctx.globalAlpha=isH?1:0.3;ctx.strokeStyle=isH?'#fff':'#1e2d3d';ctx.lineWidth=isH?2:1.5;
+    var leaf=!it._container;
+    ctx.globalAlpha=isH?1:(leaf?0.55:0.3);
+    ctx.strokeStyle=isH?'#fff':(leaf?'#0b1220':'#1e2d3d');
+    ctx.lineWidth=isH?2:1.5;
     ctx.strokeRect(x+0.5,y+0.5,iw-1,ih-1);
-    if(iw>80&&ih>30){
+    // Containers only: leaf folders already printed their name in pass 1.
+    if(!leaf&&iw>80&&ih>30){
       var label=it.name+'/';var fs=Math.max(8,Math.min(9,iw*0.04));
       ctx.font='bold '+fs+'px sans-serif';ctx.fillStyle='#94a3b8';ctx.globalAlpha=0.85;ctx.textAlign='left';ctx.textBaseline='top';
       var maxW=iw-10,textW=ctx.measureText(label).width;
@@ -628,103 +739,227 @@ document.onkeydown=function(e){
 };
 
 // ===== Clean =====
-let cleanData=[],selectedCats=new Set(['系统日志','包管理器缓存','临时文件','应用缓存']),selectedFiles=new Set();
-var catSelectState={};
+// 选择模型：
+//   catMode[分类] = 'all' | 'safe' | 'none'  —— 分类三态，默认 'safe'
+//   deselected    = 单独取消勾选的路径
+//   extraChecked  = 单独勾选的路径（⚠️ 文件，或未选分类里的文件）
+// "能不能删"始终由服务端安全闸门判定（进程占用、虚拟环境、白名单、权限、规则变更…），
+// 前端只负责展示与表达选择；执行时服务端在全量候选集上重算，不依赖本列表长度。
+var cleanPlan=null, catMode={}, deselected=new Set(), extraChecked=new Set(), cleanOpen={};
+var BLOCK_LABEL={caution:'⚠️ 删除有代价',protected:'wsl-master 自身数据',whitelist:'规则白名单',
+  no_rule:'已不符合当前规则',missing:'文件已不存在',not_file:'非普通文件',
+  in_use:'进程占用中',marker:'虚拟环境/仓库内',permission:'无写权限',recent:'刚写入的临时文件',invalid:'非法路径'};
 
-function toggleCatFilter(btn){
-  const c=btn.dataset.cat;
-  if(selectedCats.has(c)){selectedCats.delete(c);btn.classList.remove('selected')}
-  else{selectedCats.add(c);btn.classList.add('selected')}
-  renderCleanFiles();
+function fmtCount(n){return (n||0).toLocaleString()}
+function findCleanRow(path){
+  var rows=(cleanPlan&&cleanPlan.files)||[];
+  for(var i=0;i<rows.length;i++){if(rows[i].path===path)return rows[i]}
+  return null;
 }
-
-function cycleCatSelect(cat){
-  var items=cleanData.filter(function(f){return f.category===cat});
-  if(!items.length)return;
-  var st=catSelectState[cat]||'all';
-  if(st==='all'){st='safe';catSelectState[cat]='safe'}
-  else if(st==='safe'){st='none';catSelectState[cat]='none'}
-  else{st='all';catSelectState[cat]='all'}
-
-  if(st==='all'){for(var i=0;i<items.length;i++)selectedFiles.add(items[i].path)}
-  else if(st==='safe'){selectedFiles=new Set(items.filter(function(f){return f.safety==='Safe'}).map(function(f){return f.path}))}
-  else{for(var i=0;i<items.length;i++)selectedFiles.delete(items[i].path)}
-  renderCleanFiles();
+function rowSelectedByCat(f){
+  var m=catMode[f.category]||'none';
+  if(m==='all')return true;
+  if(m==='safe')return f.safety==='Safe';
+  return false;
 }
-
-function catSelectLabel(cat){
-  var st=catSelectState[cat]||'all';
-  if(st==='all')return '☑全选';
-  if(st==='safe')return '☑Safe';
-  return '☐未选';
-}
-
-function catSelectStyle(cat){
-  var st=catSelectState[cat]||'all';
-  if(st==='all')return 'background:#10b981;color:#fff;border-color:#10b981';
-  if(st==='safe')return 'background:#f59e0b;color:#fff;border-color:#f59e0b';
-  return 'background:#334155;color:#94a3b8';
+function isRowChecked(f){
+  if(!f.deletable)return false;
+  if(extraChecked.has(f.path))return true;
+  if(deselected.has(f.path))return false;
+  return rowSelectedByCat(f);
 }
 
 function loadCleanPreview(){
+  var el=document.getElementById('clean-files');
+  el.innerHTML='<p style="padding:20px;color:#64748b">正在核对文件安全性…（大扫描首次统计需要几秒）</p>';
   api('/api/clean/preview').then(function(d){
-    cleanData=d.files||[];
-    selectedFiles=new Set(cleanData.filter(function(f){return f.safety==='Safe'}).map(function(f){return f.path}));
-    catSelectState={};
-    var cats=['系统日志','包管理器缓存','临时文件','应用缓存'];
-    for(var i=0;i<cats.length;i++){
-      var items=cleanData.filter(function(f){return f.category===cats[i]});
-      if(items.length>0)catSelectState[cats[i]]='all';
+    if(!d||!d.categories){
+      cleanPlan=null;renderCleanSummary();renderCleanChips();
+      el.innerHTML='<p style="padding:20px;color:#64748b">暂无数据，请先在"磁盘分析"标签页中扫描</p>';
+      return;
     }
-    renderCleanFiles();
+    cleanPlan=d;
+    catMode={};deselected=new Set();extraChecked=new Set();cleanOpen={};
+    for(var i=0;i<d.categories.length;i++){
+      // 默认勾选：所有"删除后无影响"的 Safe 文件
+      catMode[d.categories[i].name]='safe';
+      cleanOpen[d.categories[i].name]=true;
+    }
+    renderCleanChips();renderCleanFiles();
   });
+}
+
+function computeSelection(){
+  var files=0,bytes=0,cautionFiles=0,cautionBytes=0;
+  var cats=(cleanPlan&&cleanPlan.categories)||[];
+  for(var i=0;i<cats.length;i++){
+    var c=cats[i],m=catMode[c.name]||'none';
+    if(m==='all'){files+=c.safe_files+c.caution_files;bytes+=c.safe_bytes+c.caution_bytes;
+      cautionFiles+=c.caution_files;cautionBytes+=c.caution_bytes;}
+    else if(m==='safe'){files+=c.safe_files;bytes+=c.safe_bytes;}
+  }
+  var rows=(cleanPlan&&cleanPlan.files)||[];
+  for(var j=0;j<rows.length;j++){
+    var f=rows[j];
+    if(!f.deletable)continue;
+    var byCat=rowSelectedByCat(f),off=deselected.has(f.path),on=extraChecked.has(f.path);
+    if(byCat&&off){files-=1;bytes-=f.size;if(f.safety!=='Safe'){cautionFiles-=1;cautionBytes-=f.size;}}
+    if(!byCat&&on){files+=1;bytes+=f.size;if(f.safety!=='Safe'){cautionFiles+=1;cautionBytes+=f.size;}}
+  }
+  return {files:files,bytes:bytes,cautionFiles:cautionFiles,cautionBytes:cautionBytes};
+}
+
+function renderCleanSummary(){
+  var t=(cleanPlan&&cleanPlan.totals)||{};
+  var sel=computeSelection();
+  document.getElementById('stat-selected-size').textContent=fmtSize(sel.bytes);
+  document.getElementById('stat-selected-count').textContent=fmtCount(sel.files)+' 个文件'+(sel.cautionFiles?'（含 '+fmtCount(sel.cautionFiles)+' 个 ⚠️）':'');
+  document.getElementById('stat-safe-size').textContent=fmtSize(t.safe_bytes||0);
+  document.getElementById('stat-safe-count').textContent=fmtCount(t.safe_files||0)+' 个文件（默认已全选）';
+  document.getElementById('stat-junk-size').textContent=fmtSize(t.bytes||0);
+  document.getElementById('stat-junk-count').textContent=fmtCount(t.files||0)+' 个文件命中清理规则';
+  var ask=(t.caution_bytes||0)+(t.blocked_bytes||0);
+  document.getElementById('stat-blocked-size').textContent=fmtSize(ask);
+  document.getElementById('stat-blocked-count').textContent='⚠️ '+fmtCount(t.caution_files||0)+' 需确认 · 🔒 '+fmtCount(t.blocked_files||0)+' 已拦截';
+}
+
+function renderCleanChips(){
+  var box=document.getElementById('clean-cat-filters'),h='';
+  var cats=(cleanPlan&&cleanPlan.categories)||[];
+  for(var i=0;i<cats.length;i++){
+    var c=cats[i],m=catMode[c.name]||'none';
+    var label=c.name+(m==='all'?' ☑全选':(m==='safe'?' ☑Safe':' ☐未选'));
+    h+='<button class="cat-'+m+'" data-cat="'+esc(c.name)+'" onclick="cycleCatSelect(this.dataset.cat)" title="点击切换：仅Safe → 全选 → 未选">'+esc(label)+'</button>';
+  }
+  box.innerHTML=h;
+}
+
+function cycleCatSelect(cat){
+  var cur=catMode[cat]||'none';
+  catMode[cat]=cur==='safe'?'all':(cur==='all'?'none':'safe');
+  var rows=(cleanPlan&&cleanPlan.files)||[];
+  for(var i=0;i<rows.length;i++){
+    if(rows[i].category===cat){deselected.delete(rows[i].path);extraChecked.delete(rows[i].path);}
+  }
+  renderCleanChips();renderCleanFiles();
+}
+
+function toggleCleanCat(cat){cleanOpen[cat]=!cleanOpen[cat];renderCleanFiles()}
+
+function toggleFile(path){
+  var f=findCleanRow(path);
+  if(!f||!f.deletable)return;
+  if(rowSelectedByCat(f)){
+    if(deselected.has(path))deselected.delete(path);else deselected.add(path);
+  }else{
+    if(extraChecked.has(path))extraChecked.delete(path);else extraChecked.add(path);
+  }
+  renderCleanFiles();
 }
 
 function renderCleanFiles(){
-  var el=document.getElementById('clean-files'),h='';
-  var cats=['系统日志','包管理器缓存','临时文件','应用缓存'];
-  for(var ci=0;ci<cats.length;ci++){
-    var cat=cats[ci];
-    if(!selectedCats.has(cat))continue;
-    var items=cleanData.filter(function(f){return f.category===cat});
-    if(!items.length)continue;
-    var sz=items.reduce(function(a,b){return a+(b.size||0)},0);
-    var escCat=cat.replace(/'/g,"\\'");
-    h+='<div class="cat-section"><div class="cat-header" onclick="this.nextElementSibling.classList.toggle(\'open\')"><span>📁 '+esc(cat)+'</span><span>'+items.length+' 文件 | '+fmtSize(sz)+'</span></div><div class="cat-body open"><div style="padding:6px 0;display:flex;gap:6px"><button onclick="event.stopPropagation();cycleCatSelect(\''+escCat+'\')" style="'+catSelectStyle(cat)+';padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid #2d3748">'+catSelectLabel(cat)+'</button></div><table><tr><th>☑</th><th>大小</th><th>安全</th><th>路径</th></tr>';
-    for(var fi=0;fi<items.length;fi++){
-      var f=items[fi];
-      var ck=selectedFiles.has(f.path)?'☑':'☐';
-      h+='<tr data-path="'+esc(f.path||'')+'"><td>'+ck+'</td><td>'+fmtSize(f.size)+'</td><td>'+(f.safety==='Safe'?'Safe':'⚠️')+'</td><td>'+esc((f.path||'').substring(0,60))+'</td></tr>';
-    }
-    h+='</table></div></div>';
+  var el=document.getElementById('clean-files');
+  renderCleanSummary();renderCleanChips();
+  if(!cleanPlan||!cleanPlan.categories||!cleanPlan.categories.length){
+    el.innerHTML='<p style="padding:20px;color:#64748b">没有发现可清理的垃圾文件</p>';return;
   }
-  el.innerHTML=h||'<p style="padding:20px;color:#64748b">暂无数据，请先在"磁盘分析"标签页中扫描</p>';
+  var t=cleanPlan.totals||{},notes='';
+  if(cleanPlan.rules_path&&cleanPlan.rules_changed_since_scan){
+    notes+='<div class="clean-banner warn">规则文件比这次扫描结果更新：分类已按最新规则重算，建议重新扫描以获得准确的磁盘占用。</div>';
+  }
+  var reasonMap={};
+  var cats=cleanPlan.categories;
+  for(var ci=0;ci<cats.length;ci++){
+    for(var code in cats[ci].blocked){reasonMap[code]=(reasonMap[code]||0)+cats[ci].blocked[code]}
+  }
+  if(t.blocked_files){
+    var parts=[];
+    for(var rc in reasonMap){parts.push((BLOCK_LABEL[rc]||rc)+' '+fmtCount(reasonMap[rc]))}
+    notes+='<div class="clean-banner">🔒 安全闸门拦截 '+fmtCount(t.blocked_files)+' 个文件（'+fmtSize(t.blocked_bytes||0)+'），不会删除：'+parts.join(' · ')+'</div>';
+  }else{
+    notes+='<div class="clean-banner ok">✅ 本次扫描的垃圾文件全部通过安全校验，可安全清理 '+fmtSize(t.safe_bytes||0)+'</div>';
+  }
+  if(cleanPlan.truncated){
+    notes+='<div class="clean-banner">列表按大小每类最多显示 '+fmtCount(cleanPlan.display_limit)+' 个；删除范围是全部勾选文件（共 '+fmtCount(t.files)+' 个），不受列表长度限制。</div>';
+  }
+  var h=notes;
+  for(var k=0;k<cats.length;k++){
+    var c=cats[k];
+    var rows=[],all=cleanPlan.files||[];
+    for(var i=0;i<all.length;i++){if(all[i].category===c.name)rows.push(all[i])}
+    var open=cleanOpen[c.name]!==false;
+    var m=catMode[c.name]||'none';
+    var stateLabel=m==='all'?'☑全选':(m==='safe'?'☑仅Safe':'☐未选');
+    h+='<div class="cat-section"><div class="cat-header" data-cat="'+esc(c.name)+'">'+
+       '<span>'+esc(c.name)+'</span>'+
+       '<button class="cat-'+m+'" data-cycle="'+esc(c.name)+'" style="margin-left:10px">'+stateLabel+'</button>'+
+       '<span class="cat-stats">无影响可删 '+fmtSize(c.safe_bytes)+' / '+fmtCount(c.safe_files)+' 个'+
+       (c.caution_files?' · ⚠️ '+fmtCount(c.caution_files)+' 个':'')+
+       (c.blocked_files?' · 🔒 '+fmtCount(c.blocked_files)+' 个':'')+
+       ' · 共 '+fmtSize(c.bytes)+'</span>'+
+       '<span style="color:#64748b">'+(open?'▼':'▶')+'</span></div>'+
+       '<div class="cat-body'+(open?' open':'')+'">';
+    if(!rows.length){
+      h+='<p style="padding:10px;color:#64748b;font-size:12px">（该分类文件较多，列表已省略）</p>';
+    }else{
+      h+='<table><tr><th style="width:36px">☑</th><th style="width:90px">大小</th><th style="width:130px">判定</th><th>路径</th></tr>';
+      for(var fi=0;fi<rows.length;fi++){
+        var f=rows[fi];
+        var mark=f.deletable?(isRowChecked(f)?'☑':'☐'):'🔒';
+        var badge=f.deletable
+          ? (f.safety==='Safe'?'<span class="badge safe">Safe</span>':'<span class="badge caution">⚠️ 需确认</span>')
+          : '<span class="badge blocked">🔒 已拦截</span>';
+        var cell=f.deletable?esc(f.path):esc(f.path)+' <span class="clean-reason">['+esc(f.reason||BLOCK_LABEL[f.code]||f.code)+']</span>';
+        h+='<tr class="'+(f.deletable?'row-ok':'row-blocked')+'" data-path="'+esc(f.path)+'">'+
+           '<td>'+mark+'</td><td>'+fmtSize(f.size)+'</td><td>'+badge+'</td><td class="path">'+cell+'</td></tr>';
+      }
+      h+='</table>';
+    }
+    h+='</div></div>';
+  }
+  el.innerHTML=h;
 }
 
+// 事件委托：分类名/路径都放在 data-* 里，避免把字符串拼进内联 JS
 document.getElementById('clean-files').addEventListener('click',function(e){
+  var cyc=e.target.closest('[data-cycle]');
+  if(cyc){e.stopPropagation();cycleCatSelect(cyc.dataset.cycle);return}
   var tr=e.target.closest('tr[data-path]');
-  if(tr){toggleFile(tr.dataset.path)}
+  if(tr){toggleFile(tr.dataset.path);return}
+  var header=e.target.closest('.cat-header');
+  if(header){toggleCleanCat(header.dataset.cat)}
 });
 
-function toggleFile(path){if(selectedFiles.has(path))selectedFiles.delete(path);else selectedFiles.add(path);renderCleanFiles()}
-
 function executeClean(){
-  var paths=[...selectedFiles];
-  if(!paths.length){alert('请先勾选文件');return}
-
-  var unsafePaths=paths.filter(function(p){
-    var f=cleanData.find(function(x){return x.path===p});
-    return f&&f.safety!=='Safe';
-  });
-
-  if(unsafePaths.length>0){
-    var preview=unsafePaths.slice(0,3).join('\n');
-    if(unsafePaths.length>3)preview+='\n... 等共 '+unsafePaths.length+' 个不安全文件';
-    if(!confirm('⚠️ 包含 '+unsafePaths.length+' 个不安全(\u26a0\ufe0f)文件:\n\n'+preview+'\n\n删除不安全文件可能导致系统问题！确认继续？'))return;
+  if(!cleanPlan||!cleanPlan.scan_id){alert('请先扫描');return}
+  var sel=computeSelection();
+  if(!sel.files){alert('请先勾选要清理的文件');return}
+  var include=[],exclude=[];
+  extraChecked.forEach(function(p){include.push(p)});
+  deselected.forEach(function(p){exclude.push(p)});
+  var payload={scan_id:cleanPlan.scan_id,categories:catMode,include:include,
+    exclude:exclude,quarantine:true,allow_caution:false};
+  if(sel.cautionFiles>0){
+    var samples=[];
+    var rows=cleanPlan.files||[];
+    for(var i=0;i<rows.length&&samples.length<3;i++){
+      var f=rows[i];
+      if(f.deletable&&f.safety!=='Safe'&&isRowChecked(f))samples.push(f.path);
+    }
+    var msg='⚠️ 选中文件里有 '+fmtCount(sel.cautionFiles)+' 个"需确认"文件（'+fmtSize(sel.cautionBytes)+'）：'+
+      samples.join('  |  ')+' —— 删除后可能需要重新下载，或影响正在运行的程序。确认继续？';
+    if(!confirm(msg))return;
+    payload.allow_caution=true;
   }
-
-  if(!confirm('确认删除 '+paths.length+' 个文件？'))return;
-  api('/api/clean/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paths:paths,quarantine:true})}).then(function(r){alert(r.summary||'完成');selectedFiles.clear();renderCleanFiles()});
+  if(!confirm('确认清理 '+fmtCount(sel.files)+' 个文件，预计释放 '+fmtSize(sel.bytes)+'？文件会先移入隔离区，可还原。'))return;
+  api('/api/clean/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){
+    if(r.error){alert('未执行：'+r.error+((r.blocked_count)?'（被拦截 '+r.blocked_count+' 个）':''));return}
+    var msg='清理完成\n成功 '+fmtCount(r.succeeded)+' 个 / 失败 '+fmtCount(r.failed)+' 个\n释放空间 '+fmtSize(r.freed_bytes||0);
+    if(r.blocked_count)msg+='\n安全闸门拦截 '+fmtCount(r.blocked_count)+' 个（未删除）';
+    if(r.rejected_count)msg+='\n不在扫描结果中 '+fmtCount(r.rejected_count)+' 个（未删除）';
+    alert(msg);
+    loadCleanPreview();
+  });
 }
 
 // ===== VHDX =====

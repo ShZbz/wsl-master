@@ -77,12 +77,33 @@ class ScanController:
         # to terminate) aborts like the Rust scanner does.
         self._stop_flag = threading.Event()
 
+    def _quick_roots(self) -> list[str]:
+        """快速扫描范围 = 由规则文件派生（唯一真值来源）。
+
+        旧实现把 5 个目录写死在 Python 与 Rust 两处，新增规则（~/.npm/_cacache、
+        ~/.cargo/registry/cache、~/.cache/uv …）时扫描范围不会跟着变 ——
+        规则认识、扫描扫不到，就成了永久漏删。现在两边都从 rules 派生。
+        """
+        try:
+            from wsl_master.rules.engine import quick_scan_roots
+            return quick_scan_roots(self.rules_path)
+        except Exception:
+            logger.warning("quick_scan_roots 派生失败，回退到内置目录", exc_info=True)
+            return ["/var/cache/apt", "/var/log", "/tmp",
+                    os.path.expanduser("~/.cache"),
+                    os.path.expanduser("~/.local/share/Trash")]
+
     def _build_args(self, mode: str, paths: Optional[list[str]]) -> list[str]:
         """Build the wsl-scanner argv. Paths are passed as repeated --paths
         flags — the previous ','.join() corrupted paths containing commas."""
         args = [self.scanner_path, "scan", "--db", self.db_path, "--rules", self.rules_path]
-        if mode == "quick":
-            args.append("--quick")
+        if mode == "quick" and not paths:
+            roots = self._quick_roots()
+            if roots:
+                for p in roots:
+                    args.extend(["--paths", p])
+            else:
+                args.append("--quick")
         elif paths:
             for p in paths:
                 args.extend(["--paths", p])
@@ -246,14 +267,17 @@ class ScanController:
         self.status.scan_id = scan_id
 
         store = ScanStore(self.db_path)
-        rules_engine = RulesEngine.from_default()
+        # 规则路径显式传入时优先用它；文件缺失再退回默认规则（保持旧行为）
+        rules_engine = (RulesEngine.from_yaml(self.rules_path)
+                        if self.rules_path and os.path.exists(self.rules_path)
+                        else RulesEngine.from_default())
 
-        if mode == "quick":
-            scan_paths = [
-                "/var/cache/apt", "/var/log", "/tmp",
-                os.path.expanduser("~/.cache"),
-                os.path.expanduser("~/.local/share/Trash"),
-            ]
+        if mode == "quick" and not paths:
+            # 与 Rust 扫描器共用同一份"规则派生"逻辑，避免两套扫描范围漂移
+            scan_paths = _dedup_roots([
+                p for p in self._quick_roots()
+                if os.path.isdir(p) and not _is_excluded(p)
+            ])
         elif paths:
             # Skip roots under excluded prefixes, matching the Rust scanner —
             # walking into /mnt over 9p would effectively hang the scan.

@@ -14,6 +14,10 @@ pub struct Rule {
 #[derive(Debug, Deserialize)]
 struct RulesFile {
     rules: Vec<Rule>,
+    /// Paths that are never junk (audit records, system dirs, credentials).
+    /// Mirrors the Python RulesEngine so both classifiers agree.
+    #[serde(default)]
+    whitelist: Vec<String>,
 }
 
 pub struct Classifier {
@@ -21,6 +25,22 @@ pub struct Classifier {
     pub prefix_rules: Vec<(String, String, String, Vec<Regex>)>,
     /// Slow path: (regex, category, safety, exclude_regexes) for rules with *, ?, []
     pub pattern_rules: Vec<(Regex, String, String, Vec<Regex>)>,
+    /// Never-junk prefixes (longest first for greedy matching)
+    pub whitelist: Vec<String>,
+}
+
+/// Component-aware containment: "/tmpfoo" is NOT under "/tmp".
+pub fn is_under(path: &str, root: &str) -> bool {
+    if root.is_empty() {
+        return false;
+    }
+    if root == "/" {
+        return path.starts_with('/');
+    }
+    path == root
+        || (path.len() > root.len()
+            && path.as_bytes()[root.len()] == b'/'
+            && path.starts_with(root))
 }
 
 impl Classifier {
@@ -58,15 +78,27 @@ impl Classifier {
         // Sort prefix rules by length descending for greedy (most specific first)
         prefix_rules.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
 
+        let mut whitelist: Vec<String> = rules_file
+            .whitelist
+            .iter()
+            .map(|w| shellexpand::tilde(w).to_string())
+            .collect();
+        whitelist.sort_by_key(|w| std::cmp::Reverse(w.len()));
+
         Ok(Classifier {
             prefix_rules,
             pattern_rules,
+            whitelist,
         })
     }
 
     /// Returns (category, safety) for a given file path.
-    /// Prefix rules checked first (fast), then regex rules.
+    /// Whitelisted paths are never junk; prefix rules first (fast), then regex.
     pub fn classify(&self, filepath: &str) -> (String, String) {
+        if self.whitelist.iter().any(|w| is_under(filepath, w)) {
+            return ("".to_string(), "Safe".to_string());
+        }
+
         // 1. Fast path: prefix matching (O(n) but n is small, no regex overhead)
         for (prefix, cat, safety, exclude_regexes) in &self.prefix_rules {
             if filepath.starts_with(prefix.as_str())
@@ -217,6 +249,7 @@ mod tests {
         let c = Classifier {
             prefix_rules: vec![],
             pattern_rules: vec![(pip_re, "包管理器缓存".into(), "Safe".into(), vec![exc_re])],
+            whitelist: vec![],
         };
         assert_eq!(c.classify("/home/u/.cache/pip/wheels/x.whl").0, "包管理器缓存");
         assert_eq!(c.classify("/home/u/.cache/pip/selfcheck/x.json").0, "");
@@ -229,6 +262,7 @@ mod tests {
         let c = Classifier {
             prefix_rules: vec![("/var/log".into(), "日志".into(), "Safe".into(), empty_excludes())],
             pattern_rules: vec![],
+            whitelist: vec![],
         };
         let (cat, _) = c.classify("/var/log/syslog");
         assert_eq!(cat, "日志");
@@ -240,6 +274,7 @@ mod tests {
         let c = Classifier {
             prefix_rules: vec![],
             pattern_rules: vec![(re, "系统日志".into(), "Safe".into(), empty_excludes())],
+            whitelist: vec![],
         };
         let (cat, _) = c.classify("/var/log/auth.log");
         assert_eq!(cat, "系统日志");
@@ -250,6 +285,7 @@ mod tests {
         let c = Classifier {
             prefix_rules: vec![],
             pattern_rules: vec![],
+            whitelist: vec![],
         };
         let (cat, safety) = c.classify("/etc/passwd");
         assert_eq!(cat, "");
@@ -262,6 +298,7 @@ mod tests {
         let c = Classifier {
             prefix_rules: vec![("/var/log/syslog".into(), "特定日志".into(), "Caution".into(), empty_excludes())],
             pattern_rules: vec![(re, "系统日志".into(), "Safe".into(), empty_excludes())],
+            whitelist: vec![],
         };
         let (cat, safety) = c.classify("/var/log/syslog");
         assert_eq!(cat, "特定日志"); // more specific prefix wins
@@ -274,6 +311,7 @@ mod tests {
         let c = Classifier {
             prefix_rules: vec![],
             pattern_rules: vec![(re, "临时文件".into(), "Safe".into(), empty_excludes())],
+            whitelist: vec![],
         };
         assert_eq!(c.classify("/tmp/test.txt").0, "临时文件");
         assert_eq!(c.classify("/tmp/subdir").0, "临时文件");
@@ -288,6 +326,7 @@ mod tests {
         let c = Classifier {
             prefix_rules: vec![],
             pattern_rules: vec![(re, "系统日志".into(), "Safe".into(), vec![wtmp_re, btmp_re])],
+            whitelist: vec![],
         };
         // auth.log matches the rule and is not excluded
         assert_eq!(c.classify("/var/log/auth.log").0, "系统日志");
@@ -298,12 +337,36 @@ mod tests {
     }
 
     #[test]
+    fn test_whitelist_beats_any_rule() {
+        // Same contract as the Python RulesEngine: whitelisted paths never
+        // classify as junk (audit records, /etc, credentials).
+        let re = glob_to_regex("/var/log/**").unwrap();
+        let c = Classifier {
+            prefix_rules: vec![],
+            pattern_rules: vec![(re, "系统日志".into(), "Caution".into(), empty_excludes())],
+            whitelist: vec!["/var/log/wtmp".into(), "/etc".into()],
+        };
+        assert_eq!(c.classify("/var/log/wtmp").0, "");
+        assert_eq!(c.classify("/etc/passwd").0, "");
+        assert_eq!(c.classify("/var/log/syslog").0, "系统日志"); // not whitelisted
+    }
+
+    #[test]
+    fn test_is_under_component_aware() {
+        assert!(is_under("/tmp/a", "/tmp"));
+        assert!(is_under("/tmp", "/tmp"));
+        assert!(!is_under("/tmpfoo", "/tmp"));
+        assert!(is_under("/anything", "/"));
+    }
+
+    #[test]
     fn test_classify_exclude_pattern_wildcard() {
         let re = glob_to_regex("/tmp/*").unwrap();
         let lock_re = glob_to_regex("/tmp/.X*-lock").unwrap();
         let c = Classifier {
             prefix_rules: vec![],
             pattern_rules: vec![(re, "临时文件".into(), "Safe".into(), vec![lock_re])],
+            whitelist: vec![],
         };
         assert_eq!(c.classify("/tmp/test.txt").0, "临时文件");
         assert_eq!(c.classify("/tmp/.X11-lock").0, "");

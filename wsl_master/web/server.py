@@ -17,6 +17,22 @@ logger = logging.getLogger("wsl_master.web")
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _rules_changed_since(rules_path, scan_created_at) -> bool:
+    """规则文件比扫描结果新 → 界面提示"建议重新扫描"（分类可能已过时）。"""
+    if not rules_path or not scan_created_at:
+        return False
+    try:
+        from datetime import datetime, timezone
+        mtime = os.path.getmtime(rules_path)
+        # SQLite 的 datetime('now') 是 UTC，直接 timestamp() 会被当成当地时间，
+        # 在 UTC+8 下凭空差 8 小时 —— 会让"规则已更新"横幅永远亮着。
+        created = datetime.strptime(str(scan_created_at), "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc)
+        return mtime > created.timestamp() + 1
+    except (OSError, ValueError):
+        return False
+
+
 class RequestHandler(BaseHTTPRequestHandler):
     scan_controller = None
     auth_token = None
@@ -73,7 +89,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._api_tree_files(query)
             return
         if path == "/api/clean/preview":
-            self._api_clean_preview()
+            self._api_clean_preview(query)
             return
         if path == "/api/vhdx/detect":
             self._api_vhdx_detect()
@@ -169,9 +185,19 @@ class RequestHandler(BaseHTTPRequestHandler):
             h = (len(item_id) * 37) % 360
             s = 55
             l = 48
+            spread = 44
         else:
             h, s, l = b
-        shift = (RequestHandler._hash_str(item_id) % 24) - 12
+            # Every uncategorised item shares one base hue, so the old +/-12
+            # jitter left large parts of the treemap looking like a single
+            # colour (the top level of a scan is mostly uncategorised folders).
+            # Spread that bucket wider so neighbouring tiles stay tellable
+            # apart; real categories keep the narrow jitter that preserves
+            # their identity.
+            spread = 44 if category == "未分类" else 12
+        if category == "Other":
+            spread = 0          # Other is a single synthetic bucket; keep it grey
+        shift = (RequestHandler._hash_str(item_id) % (spread * 2 + 1)) - spread
         h = (h + shift + 360) % 360
         l = max(38, l - depth * 3)
         return f"hsl({h},{s}%,{l}%)"
@@ -377,95 +403,129 @@ class RequestHandler(BaseHTTPRequestHandler):
             logger.error(f"_api_tree_files failed: {e}")
             self._send_json({"files": [], "error": str(e)}, status=500)
 
-    def _api_clean_preview(self):
+    def _api_clean_preview(self, query=None):
+        """清理预览：全量统计 + 安全闸门判定 + 截断展示。
+
+        旧实现只有一个 ORDER BY size DESC LIMIT 500 —— 第 500 名之后的垃圾
+        在界面上根本看不到、也删不掉（实测本机 10 万个垃圾文件只显示 500 个），
+        而且完全没有做删除前的安全性复核。现在统计口径是**全量**，展示才截断。
+        """
         try:
             from wsl_master.cache.store import ScanStore
-            from wsl_master.config import DEFAULT_DB_PATH
+            from wsl_master.config import DEFAULT_DB_PATH, DEFAULT_RULES_PATH
+            from wsl_master.clean.planner import get_plan
+            from wsl_master.clean.policy import get_shared_policy
 
+            query = query or {}
             store = ScanStore(DEFAULT_DB_PATH)
-            scan_id = store.get_latest_scan_id()
+            scan_id = (query.get("scan_id", [None])[0]
+                       or store.get_latest_scan_id())
             if not scan_id:
-                self._send_json({"files": []})
+                self._send_json({"files": [], "categories": [],
+                                 "totals": {}, "scan_id": ""})
                 return
 
-            # Get all categorized files from DB.
-            # `category != ''` alone cannot use the category index, forcing a
-            # scan of every file row ordered by size; resolve the distinct
-            # categories first (cached per scan) and seek each one instead.
-            conn = store._get_conn()
-            from wsl_master.cache.store import distinct_file_categories
-            cats = distinct_file_categories(conn, scan_id, DEFAULT_DB_PATH)
-            if not cats:
-                self._send_json({"files": []})
-                return
-            placeholders = ",".join("?" * len(cats))
-            rows = conn.execute(
-                f"SELECT path, size, parent_path, category, safety FROM files "
-                f"WHERE scan_id = ? AND category IN ({placeholders}) "
-                f"ORDER BY size DESC LIMIT 500",
-                [scan_id] + cats,
-            ).fetchall()
-            self._send_json({"files": [dict(r) for r in rows]})
+            policy = get_shared_policy(DEFAULT_RULES_PATH)
+            plan = get_plan(store._get_conn(), scan_id, policy)
+            data = plan.as_dict()
+            data["scan"] = store.get_scan_info(scan_id) or {}
+            data["rules_path"] = policy.rules_path or DEFAULT_RULES_PATH
+            data["rules_changed_since_scan"] = _rules_changed_since(
+                policy.rules_path, data["scan"].get("created_at"))
+            self._send_json(data)
         except Exception as e:
             logger.error(f"_api_clean_preview failed: {e}")
-            self._send_json({"files": [], "error": str(e)}, status=500)
+            self._send_json({"files": [], "categories": [], "totals": {},
+                             "error": str(e)}, status=500)
 
     def _api_clean_execute(self, body):
+        """执行清理。
+
+        两种调用方式：
+          * 范围式（前端默认）：{"scan_id","categories":{"系统日志":"safe",...},
+            "include":[...], "exclude":[...], "allow_caution":bool}
+            —— 服务端在全量候选集上重算，绝不会因为列表截断而漏删。
+          * 显式式（兼容旧客户端）：{"paths":[...]}
+        两条路径都要逐条通过 CleanPolicy 安全闸门；Caution 文件必须显式
+        allow_caution 才会被删（前端二次确认后才置位）。
+        """
         if not body:
             body = {}
-        paths = body.get("paths", [])
+        paths = body.get("paths")
         quarantine = body.get("quarantine", True)
+        allow_caution = bool(body.get("allow_caution"))
         try:
             from wsl_master.cache.store import ScanStore
             from wsl_master.config import DEFAULT_DB_PATH
             from wsl_master.clean.executor import Cleaner
+            from wsl_master.clean.planner import (
+                invalidate_plan_cache, select_explicit_paths, select_targets,
+            )
+            from wsl_master.clean.policy import get_shared_policy
 
             store = ScanStore(DEFAULT_DB_PATH)
-            scan_id = store.get_latest_scan_id()
+            scan_id = body.get("scan_id") or store.get_latest_scan_id()
             if not scan_id:
-                self._send_json({"error": "No scan found"}, status=400)
+                self._send_json({"error": "没有可用的扫描结果，请先扫描"}, status=400)
                 return
 
-            if not paths:
-                self._send_json({"error": "No paths provided"}, status=400)
-                return
-
-            # Validate each path: must be in scan results AND have a category
             conn = store._get_conn()
-            placeholders = ",".join("?" * len(paths))
-            rows = conn.execute(
-                f"SELECT path, size, category, safety FROM files "
-                f"WHERE scan_id = ? AND path IN ({placeholders}) AND category != ''",
-                [scan_id] + paths,
-            ).fetchall()
-            allowed = {r["path"]: (r["size"], r["category"], r["safety"]) for r in rows}
-            rejected = [p for p in paths if p not in allowed]
+            from wsl_master.config import DEFAULT_RULES_PATH
+            policy = get_shared_policy(DEFAULT_RULES_PATH)
 
-            if not allowed:
+            if paths is not None:
+                targets, blocked, rejected, stats = select_explicit_paths(
+                    conn, scan_id, policy, paths, allow_caution=allow_caution)
+            else:
+                categories = body.get("categories")
+                if categories is not None and not isinstance(categories, dict):
+                    self._send_json({"error": "categories 必须是 {分类: all|safe|none}"},
+                                    status=400)
+                    return
+                targets, blocked, rejected, stats = select_targets(
+                    conn, scan_id, policy,
+                    categories=categories,
+                    include=body.get("include") or [],
+                    exclude=body.get("exclude") or [],
+                    allow_caution=allow_caution)
+
+            if not targets:
                 self._send_json({
-                    "error": "No valid paths to clean",
-                    "rejected": rejected,
+                    "error": "没有可删除的文件（全部被安全闸门拦下或未勾选）",
+                    "blocked": blocked[:20], "blocked_count": len(blocked),
+                    "rejected": rejected[:50],
                 }, status=400)
                 return
 
             cleaner = Cleaner()
-            targets = [(p, s, c, safe) for p, (s, c, safe) in allowed.items()]
             report = cleaner.execute(targets, use_quarantine=quarantine)
+            invalidate_plan_cache()
             self._send_json({
                 "summary": report.summary,
                 "succeeded": report.total_succeeded,
                 "failed": report.total_failed,
-                "rejected": rejected,
+                "freed_bytes": report.total_freed_bytes,
+                "attempted": report.total_attempted,
+                "blocked": blocked[:20],
+                "blocked_count": len(blocked),
+                "rejected": rejected[:50],
+                "rejected_count": len(rejected),
+                "errors": report.errors[:5],
             })
         except Exception as e:
             logger.error(f"_api_clean_execute failed: {e}")
-            self._send_json({"summary": str(e), "succeeded": 0, "failed": len(paths), "error": str(e)}, status=500)
+            self._send_json({"summary": str(e), "succeeded": 0, "failed": 0,
+                             "error": str(e)}, status=500)
 
     def _api_rules_reload(self):
         try:
             from wsl_master.rules.engine import RulesEngine
+            from wsl_master.clean.planner import invalidate_plan_cache
             RequestHandler.rules_engine = RulesEngine.from_default()
             rule_count = len(RequestHandler.rules_engine.rules)
+            # 规则变了：清理计划缓存必须失效（安全闸门按规则文件 mtime 自动重建），
+            # 否则会拿着旧规则算出来的目标去删文件
+            invalidate_plan_cache()
             self._send_json({"status": "reloaded", "rules": rule_count})
         except Exception as e:
             logger.error(f"_api_rules_reload failed: {e}")

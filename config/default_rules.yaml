@@ -1,14 +1,22 @@
 # WSL Storage Master — Default Cleanup Rules
 #
 # RULE MATCHING PRIORITY:
-# 1. Rules are evaluated in order — the FIRST matching rule wins
-# 2. Prefix rules (no wildcards) are checked before pattern rules (*, ?, [])
-# 3. Within each group, rules declared earlier take priority
-# 4. If a file matches a rule but also matches that rule's exclude_patterns, it is skipped
-# 5. Uncategorized files (no rule match) are treated as "Safe" and not shown for cleanup
+# 1. "whitelist" 命中的路径永不判为垃圾、也永不允许删除（扫描与删除双重生效）
+# 2. 前缀规则（无通配符）优先于通配符规则；前缀规则按路径长度降序匹配
+#    （最具体的路径先命中，Rust 扫描器与 Python 引擎语义完全一致）
+# 3. 同组规则内：先声明者优先
+# 4. 命中规则但命中该规则的 exclude_patterns → 该规则不生效，继续尝试后续规则
+# 5. 未命中任何规则 → category 为空，不进入清理列表（既不显示也不删除）
+# 6. max_depth 仅作为规则描述/扫描深度提示，不参与匹配（匹配语义完全由 glob 决定）
 #
-# Each rule: path/category/safety/max_depth/exclude_patterns
+# SAFETY 分级约定：
+#   Safe    = 删除后无影响（纯可再生产物：包缓存、轮转日志、临时文件、可重建的编译/索引缓存）
+#   Caution = 删除有代价或可能影响运行中的程序（模型权重、浏览器二进制、用户配置、journal、未知缓存）
+#
+# 快速扫描的根目录由本文件的规则自动派生（见 wsl_master/rules/engine.py::quick_scan_roots），
+# 新增规则即自动纳入快速扫描，不会再出现"规则能识别但快速扫描扫不到"的漏删。
 rules:
+  # ── 包管理器缓存（Safe：全部可从上游重新下载）──────────────────────────
   - path: /var/cache/apt/archives/*.deb
     category: "包管理器缓存"
     safety: Safe
@@ -26,51 +34,78 @@ rules:
   - path: ~/.cache/pip
     category: "包管理器缓存"
     safety: Safe
-    max_depth: 5
+    max_depth: 8
     exclude_patterns: ["**/selfcheck/**"]
-    note: "pip 下载缓存，可安全清理"
+    note: "pip 下载缓存（selfcheck 保留），可安全清理"
+
+  - path: ~/.cache/uv
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 8
+    exclude_patterns: []
+    note: "uv 包缓存与中断残留的 .tmp* 目录，uv 会按需重建"
+
+  - path: ~/.cache/pypoetry
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 8
+    exclude_patterns: []
+    note: "Poetry 包缓存"
+
+  - path: ~/.cache/yarn
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 6
+    exclude_patterns: []
+    note: "Yarn 包缓存"
+
+  - path: ~/.cache/pnpm
+    category: "包管理器缓存"
+    safety: Safe
+    max_depth: 6
+    exclude_patterns: []
+    note: "pnpm 存储缓存"
 
   - path: ~/.npm/_cacache
     category: "包管理器缓存"
     safety: Safe
-    max_depth: 4
+    max_depth: 6
     exclude_patterns: []
     note: "npm 包缓存"
 
   - path: ~/.cache/go-build
     category: "包管理器缓存"
     safety: Safe
-    max_depth: 5
+    max_depth: 8
     exclude_patterns: []
     note: "Go 编译缓存"
 
   - path: ~/.cargo/registry/cache
     category: "包管理器缓存"
     safety: Safe
-    max_depth: 4
+    max_depth: 6
     exclude_patterns: []
     note: "Cargo crate 缓存"
 
   - path: ~/.cache/conda
     category: "包管理器缓存"
     safety: Safe
-    max_depth: 5
+    max_depth: 8
     exclude_patterns: []
     note: "Conda 包缓存"
 
-  - path: ~/.cache/pnpm
-    category: "包管理器缓存"
-    safety: Safe
-    max_depth: 4
-    exclude_patterns: []
-    note: "pnpm 存储缓存"
-
+  # ── 系统日志 ────────────────────────────────────────────────────────
   - path: /var/log/*.log
     category: "系统日志"
     safety: Safe
     max_depth: 2
-    exclude_patterns: ["/var/log/wtmp", "/var/log/btmp", "/var/log/faillog"]
-    note: "轮转后的旧日志文件"
+    exclude_patterns:
+      - /var/log/wtmp
+      - /var/log/btmp
+      - /var/log/faillog
+      - /var/log/lastlog
+      - /var/log/README
+    note: "轮转后的旧日志文件（wtmp/btmp/faillog/lastlog 为审计记录，永久排除）"
 
   - path: /var/log/*.gz
     category: "系统日志"
@@ -79,48 +114,188 @@ rules:
     exclude_patterns: []
     note: "压缩归档日志"
 
+  - path: /var/log/*.[0-9]
+    category: "系统日志"
+    safety: Safe
+    max_depth: 2
+    exclude_patterns: []
+    note: "轮转后的未压缩旧日志（syslog.1 / kern.log.1 等）"
+
   - path: /var/log/journal
     category: "系统日志"
     safety: Caution
-    max_depth: 3
+    max_depth: 4
     exclude_patterns: []
-    note: "systemd journal 日志，建议保留最近记录"
+    note: "systemd journal 日志，建议用 journalctl --vacuum-size 保留最近记录"
 
+  # 兜底规则必须是通配符规则（pattern），否则"前缀规则优先于通配符规则"的
+  # 匹配顺序会让它抢在 /var/log/*.log 之前命中，把轮转日志误判成 Caution。
+  - path: /var/log/**
+    category: "系统日志"
+    safety: Caution
+    max_depth: 1
+    exclude_patterns: []
+    note: "日志目录兜底：未匹配上面规则的日志（syslog / apt / nginx 等）需人工确认"
+
+  # ── 临时文件 ────────────────────────────────────────────────────────
   - path: /tmp/*
     category: "临时文件"
     safety: Safe
     max_depth: 1
-    exclude_patterns: ["/tmp/.X*-lock", "/tmp/.X11-unix"]
-    note: "系统临时目录（仅一级）"
-
-  - path: ~/.cache/thumbnails
-    category: "应用缓存"
-    safety: Safe
-    max_depth: 3
-    exclude_patterns: []
-    note: "缩略图缓存"
+    exclude_patterns:
+      - /tmp/.X*-lock
+      - /tmp/.X11-unix
+      - /tmp/.ICE-unix
+      - /tmp/.font-unix
+      - /tmp/.Test-unix
+      - /tmp/.wslg*
+      - /tmp/systemd-private-*
+      - /tmp/snap-private-tmp
+      - /tmp/ssh-*
+      - /tmp/wsl-master
+    note: "系统临时目录（仅一级；X11/会话锁文件与 wsl-master 自身数据永久排除）"
 
   - path: ~/.local/share/Trash
     category: "临时文件"
     safety: Safe
-    max_depth: 4
+    max_depth: 6
     exclude_patterns: []
     note: "桌面回收站"
 
-  - path: ~/.cache
+  # ── 应用缓存（Safe：可再生的编译/索引/渲染缓存）──────────────────────
+  - path: ~/.cache/thumbnails
+    category: "应用缓存"
+    safety: Safe
+    max_depth: 4
+    exclude_patterns: []
+    note: "缩略图缓存"
+
+  - path: ~/.cache/node-gyp
+    category: "应用缓存"
+    safety: Safe
+    max_depth: 6
+    exclude_patterns: []
+    note: "node-gyp 头文件缓存，下次编译自动重建"
+
+  - path: ~/.cache/node
+    category: "应用缓存"
+    safety: Safe
+    max_depth: 6
+    exclude_patterns: []
+    note: "Node 工具链缓存"
+
+  - path: ~/.cache/typescript
+    category: "应用缓存"
+    safety: Safe
+    max_depth: 6
+    exclude_patterns: []
+    note: "TypeScript 编译缓存"
+
+  - path: ~/.cache/pyinstaller
+    category: "应用缓存"
+    safety: Safe
+    max_depth: 6
+    exclude_patterns: []
+    note: "PyInstaller 引导缓存"
+
+  - path: ~/.cache/fontconfig
+    category: "应用缓存"
+    safety: Safe
+    max_depth: 4
+    exclude_patterns: []
+    note: "字体索引缓存，由 fc-cache 重建"
+
+  - path: ~/.cache/mesa_shader_cache
+    category: "应用缓存"
+    safety: Safe
+    max_depth: 4
+    exclude_patterns: []
+    note: "Mesa 着色器缓存"
+
+  - path: ~/.npm/_logs
+    category: "应用缓存"
+    safety: Safe
+    max_depth: 4
+    exclude_patterns: []
+    note: "npm 调试日志"
+
+  # ── 高代价缓存（Caution：删除后需要重新下载/影响正在运行的程序）────────
+  - path: ~/.cache/huggingface
+    category: "应用缓存"
+    safety: Caution
+    max_depth: 8
+    exclude_patterns: []
+    note: "HuggingFace 模型权重，删除后需重新下载（数 GB 起）"
+
+  - path: ~/.cache/ms-playwright
+    category: "应用缓存"
+    safety: Caution
+    max_depth: 6
+    exclude_patterns: []
+    note: "Playwright 浏览器二进制，删除后需重新下载"
+
+  - path: ~/.cache/puppeteer
+    category: "应用缓存"
+    safety: Caution
+    max_depth: 6
+    exclude_patterns: []
+    note: "Puppeteer 浏览器二进制，删除后需重新下载"
+
+  - path: ~/.cache/electron
+    category: "应用缓存"
+    safety: Caution
+    max_depth: 6
+    exclude_patterns: []
+    note: "Electron 预编译包缓存，删除后需重新下载"
+
+  - path: ~/.cache/google-chrome
+    category: "应用缓存"
+    safety: Caution
+    max_depth: 6
+    exclude_patterns: []
+    note: "Chrome 用户配置目录（含登录态），删除会影响浏览器"
+
+  - path: ~/.cache/chromium
+    category: "应用缓存"
+    safety: Caution
+    max_depth: 6
+    exclude_patterns: []
+    note: "Chromium 用户配置目录（含登录态），删除会影响浏览器"
+
+  - path: ~/.cache/**
     category: "应用缓存"
     safety: Caution
     max_depth: 1
-    exclude_patterns: ["~/.cache/pip", "~/.cache/go-build", "~/.cache/conda"]
-    note: "用户级通用缓存（仅统计一级，具体子目录由其他规则覆盖）"
+    exclude_patterns: []
+    note: "用户级通用缓存兜底：目录内可能包含虚拟环境/工具运行时，删除前请确认"
 
+# 永不删除（同时不会出现在清理列表中）：
+#   * 系统关键目录
+#   * 审计/登录记录（删除后无法恢复，且会破坏 last/fail2ban 等）
+#   * 密钥与凭据
 whitelist:
+  - /etc
+  - /boot
+  - /usr
+  - /bin
+  - /sbin
+  - /lib
+  - /lib64
+  - /opt
+  - /var/lib/dpkg
+  - /var/lib/apt/lists
+  - /var/lib/systemd
+  - /var/lib/containers
   - /var/log/wtmp
   - /var/log/btmp
   - /var/log/faillog
-  - /etc
-  - /var/lib/dpkg
-  - /var/lib/apt/lists
+  - /var/log/lastlog
+  - /var/log/README
+  - ~/.ssh
+  - ~/.gnupg
+  - ~/.config
+  - ~/.local/share/keyrings
+  - ~/.local/state
 
 excluded_dirs:
   - /proc

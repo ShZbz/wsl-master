@@ -66,9 +66,28 @@ class TestBuildArgs:
         assert args == ["/x", "scan", "--db", "/tmp/x.db", "--rules", "/x.yaml",
                         "--paths", "/data/a,b", "--paths", "/data/c"]
 
-    def test_quick_mode_has_no_paths(self):
+    def test_quick_mode_derives_roots_from_rules(self):
+        # 快速扫描范围现在由规则文件派生（v3.2.5）：写死目录列表的旧行为会让
+        # 新增规则（~/.npm/_cacache 等）永远扫不到 —— 规则认识、扫描扫不到 = 漏删。
+        from wsl_master.rules.engine import quick_scan_roots
         c = ScanController(scanner_path="/x", db_path="/tmp/x.db", rules_path="/x.yaml")
-        assert c._build_args("quick", ["/ignored"]) == [
+        args = c._build_args("quick", None)
+        assert args[:6] == ["/x", "scan", "--db", "/tmp/x.db", "--rules", "/x.yaml"]
+        assert "--quick" not in args
+        passed = [args[i + 1] for i, a in enumerate(args) if a == "--paths"]
+        assert passed == quick_scan_roots("/x.yaml")
+        assert passed, "规则派生不出扫描根目录时应退回 --quick，而不是空扫描"
+
+    def test_explicit_paths_still_win(self):
+        c = ScanController(scanner_path="/x", db_path="/tmp/x.db", rules_path="/x.yaml")
+        args = c._build_args("quick", ["/only/this"])
+        assert args[-2:] == ["--paths", "/only/this"]
+
+    def test_quick_mode_falls_back_to_flag_without_rules(self, monkeypatch):
+        import wsl_master.scan.controller as ctrl
+        monkeypatch.setattr(ctrl.ScanController, "_quick_roots", lambda self: [])
+        c = ScanController(scanner_path="/x", db_path="/tmp/x.db", rules_path="/x.yaml")
+        assert c._build_args("quick", None) == [
             "/x", "scan", "--db", "/tmp/x.db", "--rules", "/x.yaml", "--quick"]
 
 
