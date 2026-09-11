@@ -309,13 +309,31 @@ class TestQuickScanRoots:
         assert roots == [str(tmp_path / "a")]
 
     def test_quick_roots_default_rules_cover_every_rule_dir(self):
-        # 默认规则派生出的根目录必须覆盖仓库里默认规则文件中的目录型规则
-        from wsl_master.rules.engine import load_rules_document
-        roots = quick_scan_roots()
-        assert "/tmp" in roots and any(r.endswith("/.cache") for r in roots)
-        assert any(r.endswith("/.npm/_cacache") for r in roots), "npm 缓存必须纳入快速扫描"
-        assert any(r.endswith("/.cargo/registry/cache") for r in roots)
-        assert load_rules_document(), "默认规则文件必须可加载"
+        # 断言"规则 → 快速扫描范围"的覆盖关系，必须与开发机磁盘状态无关：
+        #   * existing_only=False —— 否则 CI 的干净 home（无 ~/.cache / ~/.npm /
+        #     ~/.cargo）会把所有用户级规则根目录滤掉，本地有这些目录所以测不出
+        #   * 覆盖判定用 rule_root(p) 自身的返回值，不在断言里写死具体路径 ——
+        #     rule_root 对具体路径是"目录存在取自身、否则退到父目录"，CI 上
+        #     ~/.npm/_cacache 不存在时派生根是 ~/.npm，覆盖关系同样成立。
+        #     （写死 ~/.npm/_cacache 正是 v0.1.4 首发 CI 红灯的根因）
+        from wsl_master.rules.engine import load_rules_document, rule_root
+        doc = load_rules_document()
+        rules = doc.get("rules") or []
+        assert rules, "默认规则文件必须可加载"
+        roots = quick_scan_roots(existing_only=False)
+        assert "/tmp" in roots
+
+        def covered(path: str) -> bool:
+            return any(path == q or path.startswith(q.rstrip("/") + "/") for q in roots)
+
+        uncovered = [r.get("path") for r in rules if not covered(rule_root(r.get("path", "")))]
+        assert not uncovered, f"以下规则目录未纳入快速扫描范围: {uncovered}"
+
+        # 规则内容回归（与磁盘状态无关）：Python↔Rust 双端最容易漂移的 npm / cargo
+        # 缓存规则曾经两侧各写死一份列表而漏扫，这里锁死规则文件里必须真的存在
+        paths = [str(r.get("path", "")) for r in rules]
+        assert any(p.startswith("~/.npm/") for p in paths), "默认规则必须覆盖 npm 缓存"
+        assert any(p.startswith("~/.cargo/") for p in paths), "默认规则必须覆盖 cargo 缓存"
 
 
 class TestQuarantineSafety:
